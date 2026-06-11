@@ -492,32 +492,25 @@ function fetchAllSamples() {
   if (!fetchAllPromise) {
     const keys = sampleKeys();
     samplesTotal = keys.length;
-    fetchAllPromise = Promise.all(keys.map(fetchSample)).then(() => {
-      // 読込完了: バナーを「準備完了」に変えて少し見せてからフェードアウト
-      const note = document.getElementById("loading-note");
-      if (note) {
-        note.textContent = "♪ 準備完了 — 描くと鳴ります";
-        setTimeout(() => {
-          note.style.opacity = "0";
-          setTimeout(() => { note.style.display = "none"; }, 700);
-        }, 2500);
-      }
-    });
+    fetchAllPromise = Promise.all(keys.map(fetchSample));
   }
   return fetchAllPromise;
 }
-// Phase 2: decode (AudioContext が要るので最初の操作後)
+// Phase 2: decode。AudioContext は suspended 状態でも decode 可能なので、
+// ページロード中に先行 decode する (gesture が要るのは resume = 発音のみ)。
 async function decodeSample(key) {
   if (sampleBank.has(key)) return sampleBank.get(key);
   const raw = rawCache.get(key);
-  if (!raw) { sampleBank.set(key, null); return null; }
+  if (raw === null) { sampleBank.set(key, null); return null; }   // fetch 失敗のみ確定
+  if (!raw) return null;
   try {
-    const buf = await ensureCtx().decodeAudioData(raw.slice(0));
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const buf = await audioCtx.decodeAudioData(raw.slice(0));
     const trimmed = trimLeadingSilence(buf);
     sampleBank.set(key, trimmed);
     return trimmed;
   } catch (e) {
-    sampleBank.set(key, null);
+    // decode 失敗は確定させない (suspended 起因なら gesture 後の preloadAll で再試行)
     return null;
   }
 }
@@ -856,13 +849,32 @@ document.getElementById("btn-log-clear").addEventListener("click", () => {
 // ─── 起動 ───
 window.addEventListener("resize", resizeCanvas);
 resizeCanvas();
-// fetch は user gesture 不要 → ページロード直後から全サンプルを並列取得。
-// AudioContext (decode/再生) だけ最初の操作後に初期化する。
-fetchAllSamples();
+// fetch + decode はどちらも user gesture 不要 (AudioContext は suspended のまま
+// decode できる) → ページロード直後から全部済ませる。gesture が要るのは resume のみ。
+// バナーは「本当に鳴らせる状態」になるまで loading を表示し、さらに最低表示時間を
+// 保証する (早すぎる「準備完了」で戸惑わないように)。
+const MIN_LOADING_MS = 3000;
+const loadStartTime = performance.now();
+(async () => {
+  await fetchAllSamples();
+  try { await Promise.all(sampleKeys().map(decodeSample)); } catch (e) {}
+  const wait = Math.max(0, MIN_LOADING_MS - (performance.now() - loadStartTime));
+  setTimeout(() => {
+    const note = document.getElementById("loading-note");
+    if (note) {
+      // 準備完了: 声のクレジットを水色 (ピンクとの対比色) で常時表示
+      note.style.color = "#1899c2";
+      note.style.background = "rgba(77, 191, 242, 0.13)";
+      note.textContent = "Voice(声): PuppeTwin";
+    }
+    const ok = [...sampleBank.values()].filter(Boolean).length;
+    document.getElementById("status").textContent = `samples ready (${ok}/${samplesTotal})`;
+  }, wait);
+})();
 document.addEventListener("pointerdown", function once() {
   document.removeEventListener("pointerdown", once);
-  ensureCtx();
-  preloadAll();
+  ensureCtx();      // gesture で resume (即時)
+  preloadAll();     // 万一 decode 失敗が残っていれば再試行
 }, { once: true });
 </script>
 </body>
