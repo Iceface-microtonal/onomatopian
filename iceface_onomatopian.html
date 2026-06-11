@@ -535,16 +535,30 @@ function stopAll() {
   for (const n of activeNodes) { try { n.stop(); } catch (e) {} }
   activeNodes = [];
 }
+// suspended 中に再生要求された event。resume が完了した時点で最新の 1 件だけ鳴らす。
+let pendingEvent = null;
 function playEvent(event) {
   const ctx = ensureCtx();
   // suspended のままスケジュールすると、resume 完了時にはエンベロープが
   // 「過去」になっていて無音になることがある (初回描画で音が出ないバグの原因)。
-  // resume の完了を待ってから currentTime 基準でスケジュールする。
+  // resume を試みつつ、statechange で running になった瞬間に pending を鳴らす。
+  // (Safari では resume() の promise が user activation を得るまで pending のままに
+  //  なるため、promise 連鎖ではなく statechange を確実な再生トリガにする。)
   if (ctx.state !== "running") {
-    ctx.resume().then(() => scheduleEvent(ctx, event))
-                .catch(() => scheduleEvent(ctx, event));
+    pendingEvent = event;
+    ctx.resume().catch(() => {});
+    ctx.addEventListener("statechange", function onState() {
+      if (ctx.state !== "running") return;
+      ctx.removeEventListener("statechange", onState);
+      if (pendingEvent) {
+        const ev = pendingEvent;
+        pendingEvent = null;
+        scheduleEvent(ctx, ev);
+      }
+    });
     return;
   }
+  pendingEvent = null;
   scheduleEvent(ctx, event);
 }
 function scheduleEvent(ctx, event) {
@@ -882,20 +896,27 @@ const loadStartTime = performance.now();
     document.getElementById("status").textContent = `samples ready (${ok}/${samplesTotal})`;
   }, wait);
 })();
-// AudioContext のアンロック: iOS Safari は pointerdown を user activation と
-// 認めないことがあるため、touchend / click でも試みる (running になったら全て解除)。
+// AudioContext のアンロック: iOS/macOS Safari は一部イベントしか user activation と
+// 認めないため、複数イベントで試みる (running になったら全て解除)。
+// resume() に加え、ジェスチャーハンドラ内での無音バッファ即時再生 (WebKit の古典的
+// アンロック手法) も行う — resume 単独では解除されない環境への保険。
+const UNLOCK_EVENTS = ["pointerdown", "pointerup", "touchstart", "touchend", "mousedown", "click", "keydown"];
 function unlockAudio() {
-  ensureCtx();      // gesture で resume
-  preloadAll();     // 万一 decode 失敗が残っていれば再試行
-  if (audioCtx && audioCtx.state === "running") {
-    for (const ev of ["pointerdown", "touchend", "click"]) {
-      document.removeEventListener(ev, unlockAudio);
-    }
+  const ctx = ensureCtx();   // gesture 内で resume
+  try {
+    // 1 サンプルの無音を即時再生 → WebKit がこのコンテキストを「許可済み」にする
+    const b = ctx.createBuffer(1, 1, 22050);
+    const s = ctx.createBufferSource();
+    s.buffer = b;
+    s.connect(ctx.destination);
+    s.start(0);
+  } catch (e) {}
+  preloadAll();              // 万一 decode 失敗が残っていれば再試行
+  if (ctx.state === "running") {
+    for (const ev of UNLOCK_EVENTS) document.removeEventListener(ev, unlockAudio);
   }
 }
-for (const ev of ["pointerdown", "touchend", "click"]) {
-  document.addEventListener(ev, unlockAudio);
-}
+for (const ev of UNLOCK_EVENTS) document.addEventListener(ev, unlockAudio);
 </script>
 </body>
 </html>
