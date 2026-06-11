@@ -537,6 +537,17 @@ function stopAll() {
 }
 function playEvent(event) {
   const ctx = ensureCtx();
+  // suspended のままスケジュールすると、resume 完了時にはエンベロープが
+  // 「過去」になっていて無音になることがある (初回描画で音が出ないバグの原因)。
+  // resume の完了を待ってから currentTime 基準でスケジュールする。
+  if (ctx.state !== "running") {
+    ctx.resume().then(() => scheduleEvent(ctx, event))
+                .catch(() => scheduleEvent(ctx, event));
+    return;
+  }
+  scheduleEvent(ctx, event);
+}
+function scheduleEvent(ctx, event) {
   stopAll();
   const bpm = Number(document.getElementById("kn-bpm").value);
   const moraSec = 30.0 / bpm;             // 30000/BPM ms
@@ -871,11 +882,20 @@ const loadStartTime = performance.now();
     document.getElementById("status").textContent = `samples ready (${ok}/${samplesTotal})`;
   }, wait);
 })();
-document.addEventListener("pointerdown", function once() {
-  document.removeEventListener("pointerdown", once);
-  ensureCtx();      // gesture で resume (即時)
+// AudioContext のアンロック: iOS Safari は pointerdown を user activation と
+// 認めないことがあるため、touchend / click でも試みる (running になったら全て解除)。
+function unlockAudio() {
+  ensureCtx();      // gesture で resume
   preloadAll();     // 万一 decode 失敗が残っていれば再試行
-}, { once: true });
+  if (audioCtx && audioCtx.state === "running") {
+    for (const ev of ["pointerdown", "touchend", "click"]) {
+      document.removeEventListener(ev, unlockAudio);
+    }
+  }
+}
+for (const ev of ["pointerdown", "touchend", "click"]) {
+  document.addEventListener(ev, unlockAudio);
+}
 </script>
 </body>
 </html>
