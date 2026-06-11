@@ -634,7 +634,7 @@ function showResult(event) {
   document.getElementById("result-word").textContent = romajiOf(event);
   const n = event.moras.length;
   document.getElementById("result-meta").innerHTML =
-    `F0 ${Math.round(event.baseF0)} Hz<br>${n} mora${event.isRedup ? " · redup" : ""}`;
+    `${n} mora${event.isRedup ? " · redup" : ""}`;   // F0 は Web 版では音に反映されないため非表示
 }
 function appendLog(event) {
   logEntries.push({ axes: { ...event.axes }, romaji: romajiOf(event),
@@ -655,7 +655,7 @@ function renderLog() {
     row.innerHTML =
       `<span class="axes">${fmt(e.axes.size)} ${fmt(e.axes.sharp)} ${fmt(e.axes.tex)} ${fmt(e.axes.bright)} →</span>` +
       `<span class="word">${e.romaji}</span>` +
-      `<span class="meta">F0:${Math.round(e.f0)} m:${e.moras.length}${e.isRedup ? "R" : ""}</span>`;
+      `<span class="meta">m:${e.moras.length}${e.isRedup ? "R" : ""}</span>`;
     // タップで「そのシニフィアンそのもの」を再生 (保存 mora 列、iPad 版 v0.4 と同じ)
     row.addEventListener("click", () => {
       setSliders(e.axes);
