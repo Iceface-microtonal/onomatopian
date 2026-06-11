@@ -421,9 +421,13 @@ const PRESETS = [
     exact: [["ch","a"],["p","u"],["ch","a"],["p","u"]] },
 ];
 
-// ─── Audio: サンプル bank (base wav のみ、音程変化なし) ───
+// ─── Audio: サンプル bank (base サンプルのみ、音程変化なし) ───
+// 高速化 (v1.1): mp3 (48kbps mono, 約 900KB) + 並列ロード + ページロード直後に
+// fetch 開始 (fetch は user gesture 不要)。decode は AudioContext 取得後。
+const SAMPLE_EXT = ".mp3";
 let audioCtx = null;
 const sampleBank = new Map();   // key: "cv_ka" / "v_a" / "n_N" → AudioBuffer
+const rawCache = new Map();     // key → ArrayBuffer (fetch 済み・decode 前)
 let samplesLoaded = 0, samplesTotal = 0;
 
 function ensureCtx() {
@@ -432,7 +436,8 @@ function ensureCtx() {
   return audioCtx;
 }
 // leading silence trim (ConsonantSampleBank.trimLeadingSilence の移植):
-// 閾値 0.01、onset が 3500 サンプル超なら音韻的閉鎖とみなし trim しない
+// 閾値 0.01、onset が 80ms 超なら音韻的閉鎖とみなし trim しない。
+// (mp3 のエンコーダ遅延 ~30ms もこれで吸収される)
 function trimLeadingSilence(buf) {
   const ch = buf.getChannelData(0);
   const maxScan = Math.floor(ch.length * 4 / 5);
@@ -440,26 +445,13 @@ function trimLeadingSilence(buf) {
   for (let i = 0; i < maxScan; i++) {
     if (Math.abs(ch[i]) > 0.01) { onset = i; break; }
   }
-  if (onset <= 0 || onset > 3500) return buf;
+  const limit = Math.floor(buf.sampleRate * 0.08);   // 80ms
+  if (onset <= 0 || onset > limit) return buf;
   const out = audioCtx.createBuffer(1, ch.length - onset, buf.sampleRate);
   out.getChannelData(0).set(ch.subarray(onset));
   return out;
 }
-async function loadSample(key) {
-  if (sampleBank.has(key)) return sampleBank.get(key);
-  try {
-    const res = await fetch(SAMPLE_BASE + key + ".wav");
-    if (!res.ok) { sampleBank.set(key, null); return null; }
-    const buf = await ensureCtx().decodeAudioData(await res.arrayBuffer());
-    const trimmed = trimLeadingSilence(buf);
-    sampleBank.set(key, trimmed);
-    return trimmed;
-  } catch (e) {
-    sampleBank.set(key, null);
-    return null;
-  }
-}
-async function preloadAll() {
+function sampleKeys() {
   const keys = [];
   for (const c of CONSONANTS) {
     let vs = VOWELS;
@@ -469,14 +461,50 @@ async function preloadAll() {
   }
   for (const v of VOWELS) keys.push("v_" + v);
   keys.push("n_N");
-  samplesTotal = keys.length;
-  const statusEl = document.getElementById("status");
-  for (const key of keys) {
-    await loadSample(key);
-    samplesLoaded++;
-    statusEl.textContent = `samples ${samplesLoaded}/${samplesTotal}`;
+  return keys;
+}
+// Phase 1: fetch (gesture 不要なのでページロード直後に並列で始める)
+async function fetchSample(key) {
+  if (rawCache.has(key)) return;
+  try {
+    const res = await fetch(SAMPLE_BASE + key + SAMPLE_EXT);
+    rawCache.set(key, res.ok ? await res.arrayBuffer() : null);
+  } catch (e) {
+    rawCache.set(key, null);
   }
-  statusEl.textContent = `samples ready (${[...sampleBank.values()].filter(Boolean).length}/${samplesTotal})`;
+  samplesLoaded++;
+  const el = document.getElementById("status");
+  if (el) el.textContent = `loading ${samplesLoaded}/${samplesTotal}`;
+}
+let fetchAllPromise = null;
+function fetchAllSamples() {
+  if (!fetchAllPromise) {
+    const keys = sampleKeys();
+    samplesTotal = keys.length;
+    fetchAllPromise = Promise.all(keys.map(fetchSample));
+  }
+  return fetchAllPromise;
+}
+// Phase 2: decode (AudioContext が要るので最初の操作後)
+async function decodeSample(key) {
+  if (sampleBank.has(key)) return sampleBank.get(key);
+  const raw = rawCache.get(key);
+  if (!raw) { sampleBank.set(key, null); return null; }
+  try {
+    const buf = await ensureCtx().decodeAudioData(raw.slice(0));
+    const trimmed = trimLeadingSilence(buf);
+    sampleBank.set(key, trimmed);
+    return trimmed;
+  } catch (e) {
+    sampleBank.set(key, null);
+    return null;
+  }
+}
+async function preloadAll() {
+  await fetchAllSamples();
+  await Promise.all(sampleKeys().map(decodeSample));
+  const ok = [...sampleBank.values()].filter(Boolean).length;
+  document.getElementById("status").textContent = `samples ready (${ok}/${samplesTotal})`;
 }
 
 function bufferFor(mora) {
@@ -783,14 +811,14 @@ document.getElementById("btn-log-clear").addEventListener("click", () => {
 // ─── 起動 ───
 window.addEventListener("resize", resizeCanvas);
 resizeCanvas();
-// AudioContext は user gesture 後でないと使えないブラウザがあるため、
-// 最初の操作で ensureCtx しつつ、サンプルの fetch 自体は先行できる場合は先行する。
+// fetch は user gesture 不要 → ページロード直後から全サンプルを並列取得。
+// AudioContext (decode/再生) だけ最初の操作後に初期化する。
+fetchAllSamples();
 document.addEventListener("pointerdown", function once() {
   document.removeEventListener("pointerdown", once);
   ensureCtx();
   preloadAll();
 }, { once: true });
-document.getElementById("status").textContent = "画面をタップするとサンプル読込開始";
 </script>
 </body>
 </html>
