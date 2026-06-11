@@ -1,0 +1,796 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Iceface Onomatopian</title>
+<style>
+  :root {
+    --pink: #e8488a;
+    --pink-bg: rgba(232, 72, 138, 0.10);
+    --pink-bg2: rgba(232, 72, 138, 0.18);
+    --gray: #888;
+    --border: rgba(0,0,0,0.10);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  body {
+    font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    background: #fff; color: #111;
+    padding: 10px; max-width: 900px; margin: 0 auto;
+  }
+  header { display: flex; align-items: baseline; gap: 8px; padding: 6px 2px 10px; }
+  header .brand { font-size: 12px; font-weight: 800; color: var(--gray); }
+  header .pts { font-size: 14px; font-weight: 800; color: var(--pink); }
+  header .sub { margin-left: auto; font-size: 9px; color: var(--gray); }
+  .panel {
+    background: #fff; border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px; margin-bottom: 8px;
+  }
+  .panel-title { font-size: 10px; font-weight: 800; color: var(--pink); letter-spacing: 0.5px; }
+  #canvas {
+    width: 100%; height: 260px; display: block; border: 1px solid var(--pink-bg2);
+    border-radius: 8px; touch-action: none; cursor: crosshair; background: #fff;
+  }
+  .row { display: flex; align-items: center; gap: 8px; }
+  .result-word { font-size: 30px; font-weight: 700; min-height: 38px; word-break: break-all; }
+  .result-meta { margin-left: auto; text-align: right; font-size: 11px; color: var(--gray); white-space: nowrap; }
+  .axis-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+  .axis-row label { width: 64px; font-size: 10px; color: var(--gray); }
+  .axis-row input[type=range] { flex: 1; accent-color: var(--pink); }
+  .axis-row .val { width: 48px; text-align: right; font-size: 10px; color: var(--gray); }
+  button {
+    font-family: inherit; font-size: 10px; font-weight: 700;
+    border: none; border-radius: 4px; padding: 5px 10px; cursor: pointer;
+    background: var(--pink-bg); color: var(--pink);
+  }
+  button:active { background: var(--pink-bg2); }
+  button.primary { background: var(--pink); color: #fff; padding: 8px 16px; font-size: 12px; }
+  button.gray { background: rgba(0,0,0,0.06); color: var(--gray); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .chips button { font-size: 9px; font-weight: 500; }
+  #romaji-input {
+    flex: 1; font-family: inherit; font-size: 14px; padding: 8px 10px;
+    border: 1.5px solid var(--pink-bg2); border-radius: 7px; outline: none;
+  }
+  #romaji-input:focus { border-color: var(--pink); }
+  #log { max-height: 160px; overflow-y: auto; margin-top: 6px; }
+  .log-row {
+    display: flex; gap: 8px; align-items: baseline; font-size: 10px;
+    padding: 2px 0; cursor: pointer; border-radius: 3px;
+  }
+  .log-row:hover { background: var(--pink-bg); }
+  .log-row .axes { color: var(--gray); width: 150px; flex-shrink: 0; }
+  .log-row .word { font-weight: 700; font-size: 11px; }
+  .log-row .meta { color: var(--gray); margin-left: auto; }
+  .hint { font-size: 9px; color: var(--gray); }
+  #status { font-size: 9px; color: var(--gray); margin-left: auto; }
+  .knob-row { display: flex; gap: 16px; flex-wrap: wrap; }
+  .knob-row .knob { display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--gray); }
+  .knob-row input[type=range] { width: 110px; accent-color: var(--pink); }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="brand">ICEFACE</span><span class="pts">Onomatopian</span>
+  <button id="btn-clear" class="gray">✕ CLEAR</button>
+  <span class="sub">Onomatopian — Phonosymbolic Topology Synthesizer (web)</span>
+</header>
+
+<!-- Sketch canvas -->
+<div class="panel" style="padding:0; border:none;">
+  <canvas id="canvas"></canvas>
+</div>
+
+<!-- Result -->
+<div class="panel">
+  <div class="row">
+    <div class="result-word" id="result-word">—</div>
+    <div class="result-meta" id="result-meta"></div>
+  </div>
+</div>
+
+<!-- Tuning -->
+<div class="panel">
+  <div class="row">
+    <span class="panel-title">TUNE</span>
+    <span id="status"></span>
+    <button id="btn-play" class="primary" style="margin-left:8px;">▶ PLAY</button>
+  </div>
+  <div class="axis-row"><label>size</label><input type="range" id="ax-size" min="-1" max="1" step="0.01" value="0"><span class="val" id="val-size">+0.00</span></div>
+  <div class="axis-row"><label>sharp</label><input type="range" id="ax-sharp" min="-1" max="1" step="0.01" value="0"><span class="val" id="val-sharp">+0.00</span></div>
+  <div class="axis-row"><label>texture</label><input type="range" id="ax-tex" min="-1" max="1" step="0.01" value="0"><span class="val" id="val-tex">+0.00</span></div>
+  <div class="axis-row"><label>bright</label><input type="range" id="ax-bright" min="-1" max="1" step="0.01" value="0"><span class="val" id="val-bright">+0.00</span></div>
+  <div class="chips" id="preset-chips"></div>
+  <div class="knob-row" style="margin-top:10px;">
+    <span class="knob">bpm <input type="range" id="kn-bpm" min="40" max="240" step="1" value="140"><span id="val-bpm">140</span></span>
+    <span class="knob">hand corr <input type="range" id="kn-hc" min="0" max="1.5" step="0.05" value="0.5"><span id="val-hc">0.50</span></span>
+  </div>
+</div>
+
+<!-- Romaji direct input -->
+<div class="panel">
+  <div class="row" style="margin-bottom:6px;">
+    <span class="panel-title">ROMAJI 直接入力</span>
+    <span class="hint" style="margin-left:auto;">空白区切り。促音=Q, 撥音=N (例 do N), 拗音=kya 等</span>
+  </div>
+  <div class="row">
+    <input id="romaji-input" type="text" value="bo u ba" autocapitalize="off" autocomplete="off" spellcheck="false">
+    <button id="btn-romaji" class="primary">▶ PLAY</button>
+  </div>
+  <div class="chips" id="romaji-chips"></div>
+</div>
+
+<!-- Log -->
+<div class="panel">
+  <div class="row">
+    <span class="panel-title">LOG (<span id="log-count">0</span>)</span>
+    <button id="btn-log-clear" class="gray" style="margin-left:auto;">CLEAR</button>
+  </div>
+  <div id="log"></div>
+</div>
+
+<script>
+"use strict";
+/* ============================================================
+ * ICEFACE PTS — Web simplified version
+ * iPad 版 (Swift) v0.4 からの忠実な移植 (簡易化した点):
+ *  - 音程変化なし: Resources/Consonants の base wav のみ (pitch variants 不使用)
+ *  - warabe (旋律) モードなし / COMPOSE モードなし
+ *  - 促音は無音 gap のみ (V-Q / 摩擦延長サンプル不使用)、連続母音 diph 不使用
+ * 生成ロジック (bias 表 v0.4 / nil-onset / ch 制限 / 決定的 seed) は iPad 版と同一。
+ * ============================================================ */
+
+const SAMPLE_BASE = "./Consonants/";   // wav の場所 (このフォルダ内、自己完結)
+
+// ─── 音素 inventory (PhonosymbolicEvent.swift と対応) ───
+const CONSONANTS = ["k","g","t","d","p","b","m","n","s","sh","ts","r","w",
+                    "ky","gy","ny","h","f","y","z","j","ch"];
+const VOWELS = ["a","i","u","e","o"];
+const VOICED = new Set(["g","d","b","m","n","r","w","gy","ny","y","z","j"]);
+const PALATALIZED = new Set(["ky","gy","ny"]);   // a/u/o のみ
+const SEMIVOWEL = new Set(["y"]);                // a/u/o のみ
+
+// ─── bias 表 v0.4 (CVGenerator.swift §2) ───
+const CONSONANT_BIAS = {
+  k:  { size: -0.4,  sharp: 0.80, tex: 0.0,  bright:  0.3 },
+  g:  { size:  0.6,  sharp: 0.50, tex: 0.0,  bright: -0.3 },
+  t:  { size: -0.2,  sharp: 0.70, tex: 0.0,  bright:  0.0 },
+  d:  { size:  0.4,  sharp: 0.35, tex: 0.0,  bright: -0.2 },
+  p:  { size: -0.3,  sharp: 0.40, tex: 0.0,  bright:  0.0 },
+  b:  { size:  0.5,  sharp: 0.15, tex: 0.0,  bright: -0.3 },
+  m:  { size:  0.20, sharp: -0.70, tex: 0.0, bright: -0.3 },
+  n:  { size:  0.10, sharp: -0.60, tex: 0.0, bright:  0.0 },
+  s:  { size: -0.3,  sharp: 0.60, tex: 0.0,  bright:  0.6 },
+  sh: { size:  0.0,  sharp: 0.30, tex: 0.0,  bright: -0.2 },
+  ts: { size: -0.2,  sharp: 0.80, tex: 0.3,  bright:  0.2 },
+  r:  { size:  0.0,  sharp: -0.20, tex: 0.5, bright:  0.0 },
+  w:  { size:  0.3,  sharp: -0.60, tex: 0.0, bright: -0.4 },
+  ky: { size: -0.5,  sharp: 0.70, tex: 0.0,  bright:  0.65 },
+  gy: { size:  0.30, sharp: 0.40, tex: 0.10, bright:  0.0 },
+  ny: { size:  0.0,  sharp: -0.50, tex: 0.10, bright: 0.30 },
+  h:  { size: -0.20, sharp: -0.10, tex: 0.10, bright: 0.20 },
+  f:  { size: -0.10, sharp: -0.20, tex: 0.15, bright: 0.0 },
+  y:  { size:  0.10, sharp: -0.55, tex: 0.20, bright: 0.50 },
+  z:  { size:  0.20, sharp: 0.20, tex: 0.40,  bright: 0.20 },
+  j:  { size:  0.30, sharp: 0.10, tex: 0.45,  bright: 0.10 },
+  ch: { size: -0.35, sharp: 0.70, tex: 0.15,  bright: 0.25 },  // bias v2
+};
+const VOWEL_BIAS = {
+  a: { size:  0.80, sharp:  0.0, bright: -0.30 },
+  o: { size:  0.55, sharp: -0.3, bright: -0.70 },
+  u: { size:  0.20, sharp: -0.4, bright: -0.50 },
+  e: { size: -0.30, sharp:  0.0, bright:  0.60 },
+  i: { size: -0.85, sharp:  0.3, bright:  0.90 },
+};
+// nil-onset (単独母音) スコア v0.4
+const NIL_BASE = -0.68, NIL_SHARP_PENALTY = 1.45, NIL_DULL_BONUS = 0.0;
+
+// ─── 決定的 RNG (同じ描写 = 同じシニフィアン) ───
+function axesSeed(ax, salt) {
+  // 1e-4 量子化 + FNV-1a 32bit (Swift 版 deterministicSeed の 32bit 簡易版)
+  let h = 0x811c9dc5 ^ (salt >>> 0);
+  for (const v of [ax.size, ax.sharp, ax.tex, ax.bright]) {
+    const q = Math.round(v * 10000) | 0;
+    h ^= (q >>> 0);
+    h = Math.imul(h, 0x01000193);
+    h ^= h >>> 13;
+  }
+  return h >>> 0;
+}
+function mulberry32(seed) {
+  let s = seed >>> 0;
+  return function() {
+    s = (s + 0x6D2B79F5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// ─── CVGenerator (Swift v0.4 の移植) ───
+function scoreAgainst(target, bias) {
+  return -(0.7 * Math.abs(bias.size - target.size)
+         + Math.abs(bias.sharp - target.sharp)
+         + Math.abs(bias.bright - target.bright));
+}
+function softmaxSample(scores, temperature, rand) {
+  if (scores.length === 0) return null;
+  if (temperature < 1e-3) {
+    let best = scores[0];
+    for (const s of scores) if (s[1] > best[1]) best = s;
+    return best[0];
+  }
+  const maxS = Math.max(...scores.map(s => s[1]));
+  const exps = scores.map(s => [s[0], Math.exp((s[1] - maxS) / temperature)]);
+  const sum = exps.reduce((a, e) => a + e[1], 0);
+  if (sum <= 0) return scores[0][0];
+  const r = rand();
+  let cum = 0;
+  for (const [item, e] of exps) {
+    cum += e / sum;
+    if (r < cum) return item;
+  }
+  return exps[exps.length - 1][0];
+}
+function pickConsonant(target, prevOnset, temperature, rand) {
+  const scores = [];
+  // nil-onset 候補 (sharpness 中心スコア v0.4)
+  let nilScore = NIL_BASE
+               - NIL_SHARP_PENALTY * Math.max(0, target.sharp)
+               + NIL_DULL_BONUS * Math.max(0, -target.sharp);
+  if (prevOnset === null) nilScore -= 0.4;     // 連続 V 抑制
+  scores.push([null, nilScore]);
+  for (const c of CONSONANTS) {
+    let s = scoreAgainst(target, CONSONANT_BIAS[c]);
+    if (prevOnset === c) s -= 0.3;             // 同子音連続ペナルティ
+    scores.push([c, s]);
+  }
+  return softmaxSample(scores, temperature, rand);
+}
+function pickVowel(target, redupFirst, temperature, restrict, rand) {
+  const scores = [];
+  for (const v of VOWELS) {
+    if (restrict && !restrict.has(v)) continue;
+    let s = scoreAgainst(target, VOWEL_BIAS[v]);
+    if (redupFirst && redupFirst === v) s += 0.3;
+    scores.push([v, s]);
+  }
+  return softmaxSample(scores, temperature, rand) ?? "a";
+}
+function geminateGapMs(c) {
+  if (c === null) return 70;
+  if (["k","t","p","ky","ch"].includes(c)) return 110;
+  if (["s","sh","ts","h","f"].includes(c)) return 65;
+  if (["g","d","b","gy"].includes(c)) return 85;
+  if (["z","j"].includes(c)) return 75;
+  return 55; // m n r w y ny
+}
+function generate(axes, rand, temperature = 0.4) {
+  const rawCount = 2.0 + (axes.tex + 1.0) * 1.5;
+  const moraCount = Math.max(1, Math.min(6, Math.round(rawCount)));
+  const isRedup = axes.tex > 0.6;
+  const geminateOn = (axes.tex > 0.6 && axes.sharp > 0.0) || axes.tex > 0.85;
+  const uniqueCount = isRedup ? Math.min(2, moraCount) : moraCount;
+
+  const unique = [];
+  let prevOnset = undefined, firstVowel = null;
+  for (let i = 0; i < uniqueCount; i++) {
+    const onset = pickConsonant(axes, prevOnset === undefined ? "" : prevOnset, temperature, rand);
+    let restrict = null;
+    if (onset && (PALATALIZED.has(onset) || SEMIVOWEL.has(onset))) restrict = new Set(["a","u","o"]);
+    else if (onset === "ch") restrict = new Set(["a","i","u","o"]);
+    const nucleus = pickVowel(axes, isRedup ? firstVowel : null, temperature, restrict, rand);
+    if (firstVowel === null) firstVowel = nucleus;
+    unique.push({ onset, nucleus, durationMs: 170 + axes.size * 20,
+                  gapMs: 0, amplitude: 1.0, isN: false });
+    prevOnset = onset;
+  }
+
+  const moras = [];
+  for (let i = 0; i < moraCount; i++) {
+    const u = unique[i % uniqueCount];
+    const needsGap = geminateOn && i === uniqueCount && uniqueCount < moraCount;
+    const cycle = Math.floor(i / uniqueCount);
+    const amp = (isRedup && cycle > 0) ? Math.max(0.7, 1.0 - 0.08 * cycle) : 1.0;
+    moras.push({ onset: u.onset, nucleus: u.nucleus, durationMs: u.durationMs,
+                 gapMs: needsGap ? geminateGapMs(u.onset) : 0,
+                 amplitude: amp, isN: false });
+  }
+
+  // 撥音 (ん) 末尾付与
+  const nScore = 0.5 * axes.size + 0.3 * axes.sharp - 0.3 * axes.tex;
+  const p = Math.max(0, Math.min(1, 0.15 + nScore * 0.30));
+  if (moras.length > 0 && rand() < p) {
+    moras.push({ onset: null, nucleus: "a", durationMs: 160, gapMs: 0,
+                 amplitude: 1.0, isN: true });
+  }
+
+  const f0 = Math.max(80, Math.min(400, 200 * (1 + 0.2 * axes.bright - 0.2 * axes.size)));
+  return { axes: { ...axes }, moras, baseF0: f0, isRedup };
+}
+function romajiOf(event) {
+  let s = "";
+  for (const m of event.moras) {
+    if (m.gapMs > 0) s += "Q";
+    if (m.isN) s += "N";
+    else s += (m.onset ?? "") + m.nucleus;
+  }
+  return s;
+}
+
+// ─── AxisExtractor (Swift Phase 1n の移植) ───
+function extractAxes(points, w, h) {
+  if (points.length < 2 || w <= 0 || h <= 0) return { size: 0, sharp: 0, tex: 0, bright: 0 };
+  const clamp = v => Math.max(-1, Math.min(1, v));
+  let minX = points[0].x, maxX = points[0].x, minY = points[0].y, maxY = points[0].y;
+  for (const p of points) {
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+  }
+  const bboxDiag = Math.hypot(maxX - minX, maxY - minY);
+  const canvasDiag = Math.hypot(w, h);
+  const ratio = Math.max(0.05, Math.min(1.0, bboxDiag / canvasDiag));
+  const sizeNorm = (Math.log2(ratio) - Math.log2(0.05)) / (0 - Math.log2(0.05));
+  const size = clamp(sizeNorm * 2 - 1);
+
+  const k = Math.max(1, Math.min(Math.floor(points.length / 30), 8));
+  const changes = [];
+  for (let i = k; i < points.length - k; i++) {
+    const v1x = points[i].x - points[i-k].x, v1y = points[i].y - points[i-k].y;
+    const v2x = points[i+k].x - points[i].x, v2y = points[i+k].y - points[i].y;
+    const l1 = Math.hypot(v1x, v1y), l2 = Math.hypot(v2x, v2y);
+    if (l1 < 1e-6 || l2 < 1e-6) continue;
+    const cosT = Math.max(-1, Math.min(1, (v1x*v2x + v1y*v2y) / (l1*l2)));
+    changes.push(Math.acos(cosT));
+  }
+  let sharp = 0;
+  if (changes.length > 0) {
+    const sorted = [...changes].sort((a,b) => b-a);
+    const topN = Math.max(1, Math.floor(sorted.length / 10));
+    const topMean = sorted.slice(0, topN).reduce((a,b) => a+b, 0) / topN;
+    const topNorm = Math.min(1, topMean / (Math.PI * 0.5));
+    const thr = 2 * Math.PI / 3;
+    const ratio2 = changes.filter(c => c > thr).length / changes.length;
+    sharp = clamp((0.6 * topNorm + 0.4 * ratio2) * 2 - 1);
+  }
+
+  let pathLen = 0;
+  for (let i = 1; i < points.length; i++)
+    pathLen += Math.hypot(points[i].x - points[i-1].x, points[i].y - points[i-1].y);
+  let folds = 0, prevSign = 0;
+  for (let i = 1; i < points.length - 1; i++) {
+    const v1x = points[i].x - points[i-1].x, v1y = points[i].y - points[i-1].y;
+    const v2x = points[i+1].x - points[i].x, v2y = points[i+1].y - points[i].y;
+    const cross = v1x * v2y - v1y * v2x;
+    if (Math.abs(cross) < 1e-9) continue;
+    const sign = cross > 0 ? 1 : -1;
+    if (prevSign !== 0 && sign !== prevSign) folds++;
+    prevSign = sign;
+  }
+  const wiggle = pathLen / Math.max(bboxDiag, 1);
+  const tex = clamp((0.5 * Math.min(1, folds / 8) + 0.5 * Math.min(1, Math.max(0, (wiggle - 1) / 4))) * 2 - 1);
+
+  const meanY = points.reduce((a,p) => a + p.y, 0) / points.length;
+  const bright = clamp(1 - 2 * (meanY / h));
+  return { size, sharp, tex, bright };
+}
+function applyHandCorrection(ax, level) {
+  const amt = Math.max(0, Math.min(1, level));
+  return {
+    size: ax.size,
+    sharp: Math.max(-1, Math.min(1, ax.sharp + amt * 0.6)),
+    tex: ax.tex * (1 - amt * 0.3),
+    bright: ax.bright,
+  };
+}
+
+// ─── プリセット (PresetShape.swift v0.4 の 10 種) ───
+function shapeBouba()  { const p=[]; for(let i=0;i<=60;i++){const t=i*2*Math.PI/60; p.push({x:0.50+Math.cos(t)*0.30, y:0.65+Math.sin(t)*0.30});} return p; }
+function shapeKiki()   { const p=[]; const dx=(0.88-0.12)/14; for(let i=0;i<=14;i++) p.push({x:0.12+i*dx, y:0.30+(i%2===0?-0.16:0.16)}); return p; }
+function shapeMaluma() { const p=[]; for(let i=0;i<=70;i++){const t=i*2*Math.PI/70; const m=1+Math.sin(t*2)*0.06; p.push({x:0.50+Math.cos(t)*0.22*m, y:0.50+Math.sin(t)*0.17*m});} return p; }
+function shapeTakete() { const p=[]; const dx=(0.72-0.28)/8; for(let i=0;i<=8;i++) p.push({x:0.28+i*dx, y:0.28+(i%2===0?0.13:-0.13)}); return p; }
+function shapeFuwa()   { const p=[]; for(let i=0;i<=80;i++){const t=i*2*Math.PI/80; const r=0.24+Math.sin(t*3)*0.025+Math.cos(t*5)*0.012; p.push({x:0.50+Math.cos(t)*r, y:0.48+Math.sin(t)*r});} return p; }
+function shapeGotsu()  { const off=[0,-1,0.4,-0.7,1,-0.3,0.7,-1,0.5,-0.6,0.9,-0.4,0.6,-0.9,0.3,-0.5,0.8,-1,0.2]; const p=[]; for(let i=0;i<18;i++){const t=i/17; p.push({x:0.12+t*0.76, y:0.70+off[i]*0.13});} return p; }
+function shapeKira()   { const p=[]; for(let i=0;i<=50;i++){const t=i/50; p.push({x:0.20+t*0.60, y:0.30+Math.sin(t*Math.PI*7)*0.06});} return p; }
+function shapeKoro()   { const p=[]; for(const cx of [0.28,0.44,0.60,0.76]) for(let i=0;i<=24;i++){const t=i*2*Math.PI/24-Math.PI/2; p.push({x:cx+Math.cos(t)*0.055, y:0.42+Math.sin(t)*0.055});} return p; }
+function shapeGoro()   { const p=[]; for(let i=0;i<=40;i++){const t=i/40; p.push({x:0.12+t*0.76, y:0.58+Math.sin(t*Math.PI*3)*0.11});} return p; }
+function shapeChapu()  { const p=[]; for(let i=0;i<=60;i++){const t=i/60; p.push({x:0.15+t*0.70, y:0.66-Math.abs(Math.sin(t*Math.PI*5))*0.09});} return p; }
+
+const PRESETS = [
+  { label: "bouba",       axes: { size: 1,    sharp: -1,   tex: -1,   bright: -1   }, shape: shapeBouba,
+    exact: [["b","o"],[null,"u"],["b","a"]] },
+  { label: "kiki",        axes: { size: 1,    sharp: 1,    tex: 1,    bright: 1    }, shape: shapeKiki,
+    exact: [["k","i"],["k","i"]] },
+  { label: "maluma",      axes: { size: 0.5,  sharp: -0.9, tex: -0.3, bright: 0.0  }, shape: shapeMaluma,
+    exact: [["m","a"],["r","u"],["m","a"]] },
+  { label: "takete",      axes: { size: -0.2, sharp: 0.9,  tex: 0.3,  bright: 0.5  }, shape: shapeTakete,
+    exact: [["t","a"],["k","e"],["t","e"]] },
+  { label: "fuwa-fuwa",   axes: { size: 0.5,  sharp: -0.7, tex: -0.4, bright: 0.3  }, shape: shapeFuwa,
+    exact: [["f","u"],["w","a"],["f","u"],["w","a"]] },
+  { label: "gotsu-gotsu", axes: { size: 1,    sharp: 0.6,  tex: 0.9,  bright: -0.6 }, shape: shapeGotsu,
+    exact: [["g","o"],["ts","u"],["g","o"],["ts","u"]] },
+  { label: "kira-kira",   axes: { size: -0.7, sharp: 0.3,  tex: 0.9,  bright: 0.7  }, shape: shapeKira,
+    exact: [["k","i"],["r","a"],["k","i"],["r","a"]] },
+  { label: "koro-koro",   axes: { size: -0.4, sharp: -0.5, tex: 0.7,  bright: 0.3  }, shape: shapeKoro,
+    exact: [["k","o"],["r","o"],["k","o"],["r","o"]] },
+  { label: "goro-goro",   axes: { size: 0.7,  sharp: -0.4, tex: 0.7,  bright: -0.5 }, shape: shapeGoro,
+    exact: [["g","o"],["r","o"],["g","o"],["r","o"]] },
+  { label: "chapu-chapu", axes: { size: 0.0,  sharp: 0.6,  tex: 0.5,  bright: -0.4 }, shape: shapeChapu,
+    exact: [["ch","a"],["p","u"],["ch","a"],["p","u"]] },
+];
+
+// ─── Audio: サンプル bank (base wav のみ、音程変化なし) ───
+let audioCtx = null;
+const sampleBank = new Map();   // key: "cv_ka" / "v_a" / "n_N" → AudioBuffer
+let samplesLoaded = 0, samplesTotal = 0;
+
+function ensureCtx() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === "suspended") audioCtx.resume();
+  return audioCtx;
+}
+// leading silence trim (ConsonantSampleBank.trimLeadingSilence の移植):
+// 閾値 0.01、onset が 3500 サンプル超なら音韻的閉鎖とみなし trim しない
+function trimLeadingSilence(buf) {
+  const ch = buf.getChannelData(0);
+  const maxScan = Math.floor(ch.length * 4 / 5);
+  let onset = -1;
+  for (let i = 0; i < maxScan; i++) {
+    if (Math.abs(ch[i]) > 0.01) { onset = i; break; }
+  }
+  if (onset <= 0 || onset > 3500) return buf;
+  const out = audioCtx.createBuffer(1, ch.length - onset, buf.sampleRate);
+  out.getChannelData(0).set(ch.subarray(onset));
+  return out;
+}
+async function loadSample(key) {
+  if (sampleBank.has(key)) return sampleBank.get(key);
+  try {
+    const res = await fetch(SAMPLE_BASE + key + ".wav");
+    if (!res.ok) { sampleBank.set(key, null); return null; }
+    const buf = await ensureCtx().decodeAudioData(await res.arrayBuffer());
+    const trimmed = trimLeadingSilence(buf);
+    sampleBank.set(key, trimmed);
+    return trimmed;
+  } catch (e) {
+    sampleBank.set(key, null);
+    return null;
+  }
+}
+async function preloadAll() {
+  const keys = [];
+  for (const c of CONSONANTS) {
+    let vs = VOWELS;
+    if (PALATALIZED.has(c) || SEMIVOWEL.has(c)) vs = ["a","u","o"];
+    else if (c === "ch") vs = ["a","i","u","o"];
+    for (const v of vs) keys.push("cv_" + c + v);
+  }
+  for (const v of VOWELS) keys.push("v_" + v);
+  keys.push("n_N");
+  samplesTotal = keys.length;
+  const statusEl = document.getElementById("status");
+  for (const key of keys) {
+    await loadSample(key);
+    samplesLoaded++;
+    statusEl.textContent = `samples ${samplesLoaded}/${samplesTotal}`;
+  }
+  statusEl.textContent = `samples ready (${[...sampleBank.values()].filter(Boolean).length}/${samplesTotal})`;
+}
+
+function bufferFor(mora) {
+  if (mora.isN) return sampleBank.get("n_N") ?? null;
+  if (mora.onset === null) return sampleBank.get("v_" + mora.nucleus) ?? null;
+  const exact = sampleBank.get("cv_" + mora.onset + mora.nucleus);
+  if (exact) return exact;
+  return sampleBank.get("cv_" + mora.onset + "a") ?? null;   // /a/ フォールバック
+}
+
+// ─── 再生: BPM グリッド (1 mora = 30000/BPM ms, 発話テンポ統一) ───
+let activeNodes = [];
+function stopAll() {
+  for (const n of activeNodes) { try { n.stop(); } catch (e) {} }
+  activeNodes = [];
+}
+function playEvent(event) {
+  const ctx = ensureCtx();
+  stopAll();
+  const bpm = Number(document.getElementById("kn-bpm").value);
+  const moraSec = 30.0 / bpm;             // 30000/BPM ms
+  let t = ctx.currentTime + 0.04;
+  for (const m of event.moras) {
+    t += m.gapMs / 1000;                  // 促音 = 無音 gap
+    const buf = bufferFor(m);
+    if (buf) {
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      const g = ctx.createGain();
+      const dur = moraSec;
+      // 3ms fade-in / 12ms fade-out で click 防止、amplitude は反復 decrescendo
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(m.amplitude, t + 0.003);
+      g.gain.setValueAtTime(m.amplitude, t + Math.max(0.003, dur - 0.012));
+      g.gain.linearRampToValueAtTime(0, t + dur);
+      src.connect(g).connect(ctx.destination);
+      src.start(t);
+      src.stop(t + dur + 0.02);
+      activeNodes.push(src);
+    }
+    t += moraSec;
+  }
+}
+
+// ─── UI 状態 ───
+let lastAxes = { size: 0, sharp: 0, tex: 0, bright: 0 };
+let presetFirstTapDone = new Set();
+let presetTapCounts = new Map();
+const logEntries = [];   // { axes, romaji, f0, moras, isRedup }
+
+function setSliders(ax) {
+  lastAxes = { ...ax };
+  const pairs = [["size","size"],["sharp","sharp"],["tex","tex"],["bright","bright"]];
+  for (const [id, key] of pairs) {
+    document.getElementById("ax-" + id).value = ax[key];
+    document.getElementById("val-" + id).textContent = (ax[key] >= 0 ? "+" : "") + ax[key].toFixed(2);
+  }
+}
+function readSliders() {
+  return {
+    size: Number(document.getElementById("ax-size").value),
+    sharp: Number(document.getElementById("ax-sharp").value),
+    tex: Number(document.getElementById("ax-tex").value),
+    bright: Number(document.getElementById("ax-bright").value),
+  };
+}
+function showResult(event) {
+  document.getElementById("result-word").textContent = romajiOf(event);
+  const n = event.moras.length;
+  document.getElementById("result-meta").innerHTML =
+    `F0 ${Math.round(event.baseF0)} Hz<br>${n} mora${event.isRedup ? " · redup" : ""}`;
+}
+function appendLog(event) {
+  logEntries.push({ axes: { ...event.axes }, romaji: romajiOf(event),
+                    f0: event.baseF0, moras: event.moras.map(m => ({ ...m })),
+                    isRedup: event.isRedup });
+  if (logEntries.length > 100) logEntries.shift();
+  renderLog();
+}
+function renderLog() {
+  const el = document.getElementById("log");
+  document.getElementById("log-count").textContent = logEntries.length;
+  el.innerHTML = "";
+  for (let i = logEntries.length - 1; i >= 0; i--) {
+    const e = logEntries[i];
+    const row = document.createElement("div");
+    row.className = "log-row";
+    const fmt = v => (v >= 0 ? "+" : "") + v.toFixed(1);
+    row.innerHTML =
+      `<span class="axes">${fmt(e.axes.size)} ${fmt(e.axes.sharp)} ${fmt(e.axes.tex)} ${fmt(e.axes.bright)} →</span>` +
+      `<span class="word">${e.romaji}</span>` +
+      `<span class="meta">F0:${Math.round(e.f0)} m:${e.moras.length}${e.isRedup ? "R" : ""}</span>`;
+    // タップで「そのシニフィアンそのもの」を再生 (保存 mora 列、iPad 版 v0.4 と同じ)
+    row.addEventListener("click", () => {
+      setSliders(e.axes);
+      const ev = { axes: e.axes, moras: e.moras, baseF0: e.f0, isRedup: e.isRedup };
+      showResult(ev);
+      playEvent(ev);
+    });
+    el.appendChild(row);
+  }
+}
+
+// 生成 + 再生 + ログ (決定的 seed)
+function generateAndPlay(axes, salt = 0, log = true) {
+  const rand = mulberry32(axesSeed(axes, salt));
+  const event = generate(axes, rand);
+  showResult(event);
+  playEvent(event);
+  if (log) appendLog(event);
+  return event;
+}
+
+// ─── Canvas (sketch) ───
+const canvas = document.getElementById("canvas");
+const cctx = canvas.getContext("2d");
+let drawing = false, stroke = [], presetShapePts = null;
+
+function resizeCanvas() {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  cctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  redraw();
+}
+function redraw() {
+  const rect = canvas.getBoundingClientRect();
+  cctx.clearRect(0, 0, rect.width, rect.height);
+  // プリセット見本の形 (薄ピンク)
+  if (presetShapePts && presetShapePts.length > 1) {
+    cctx.beginPath();
+    cctx.strokeStyle = "rgba(232,72,138,0.30)";
+    cctx.lineWidth = 2;
+    presetShapePts.forEach((p, i) => {
+      const x = p.x * rect.width, y = p.y * rect.height;
+      i === 0 ? cctx.moveTo(x, y) : cctx.lineTo(x, y);
+    });
+    cctx.stroke();
+  }
+  if (stroke.length > 1) {
+    cctx.beginPath();
+    cctx.strokeStyle = "#555";
+    cctx.lineWidth = 2.5;
+    cctx.lineCap = "round";
+    cctx.lineJoin = "round";
+    stroke.forEach((p, i) => i === 0 ? cctx.moveTo(p.x, p.y) : cctx.lineTo(p.x, p.y));
+    cctx.stroke();
+  }
+}
+function pointerPos(ev) {
+  const rect = canvas.getBoundingClientRect();
+  return { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
+}
+canvas.addEventListener("pointerdown", ev => {
+  ensureCtx();
+  drawing = true;
+  presetShapePts = null;
+  stroke = [pointerPos(ev)];
+  canvas.setPointerCapture(ev.pointerId);
+  ev.preventDefault();
+});
+canvas.addEventListener("pointermove", ev => {
+  if (!drawing) return;
+  stroke.push(pointerPos(ev));
+  redraw();
+  ev.preventDefault();
+});
+canvas.addEventListener("pointerup", ev => {
+  if (!drawing) return;
+  drawing = false;
+  if (stroke.length >= 2) {
+    const rect = canvas.getBoundingClientRect();
+    const raw = extractAxes(stroke, rect.width, rect.height);
+    const hc = Number(document.getElementById("kn-hc").value);
+    const ax = applyHandCorrection(raw, hc);
+    setSliders(ax);
+    generateAndPlay(ax);   // 同じ描写 = 同じ語 (決定的)
+  }
+  ev.preventDefault();
+});
+
+// ─── TUNE / プリセット / ROMAJI / その他 UI 配線 ───
+document.getElementById("btn-play").addEventListener("click", () => {
+  generateAndPlay(readSliders());
+});
+["size","sharp","tex","bright"].forEach(id => {
+  document.getElementById("ax-" + id).addEventListener("input", () => {
+    const ax = readSliders();
+    lastAxes = ax;
+    document.getElementById("val-" + id).textContent =
+      (ax[id === "tex" ? "tex" : id] >= 0 ? "+" : "") + ax[id === "tex" ? "tex" : id].toFixed(2);
+  });
+});
+document.getElementById("kn-bpm").addEventListener("input", e => {
+  document.getElementById("val-bpm").textContent = e.target.value;
+});
+document.getElementById("kn-hc").addEventListener("input", e => {
+  document.getElementById("val-hc").textContent = Number(e.target.value).toFixed(2);
+});
+
+// プリセット chips
+const chipsEl = document.getElementById("preset-chips");
+for (const preset of PRESETS) {
+  const b = document.createElement("button");
+  b.textContent = preset.label;
+  b.addEventListener("click", () => {
+    ensureCtx();
+    setSliders(preset.axes);
+    stroke = [];
+    presetShapePts = preset.shape();
+    redraw();
+    const count = (presetTapCounts.get(preset.label) ?? 0) + 1;
+    presetTapCounts.set(preset.label, count);
+    if (!presetFirstTapDone.has(preset.label)) {
+      // 初回タップ: 正確な発音
+      presetFirstTapDone.add(preset.label);
+      const moras = preset.exact.map(([c, v]) => ({
+        onset: c, nucleus: v, durationMs: 180, gapMs: 0, amplitude: 1.0, isN: false
+      }));
+      const f0 = Math.max(80, Math.min(400, 200 * (1 + 0.2 * preset.axes.bright - 0.2 * preset.axes.size)));
+      const ev = { axes: preset.axes, moras, baseF0: f0, isRedup: false };
+      showResult(ev);
+      playEvent(ev);
+      appendLog(ev);
+    } else {
+      // 2 回目以降: タップ回数 salt の変奏
+      generateAndPlay(preset.axes, count);
+    }
+  });
+  chipsEl.appendChild(b);
+}
+
+// ROMAJI 直接入力 (parseMora の移植)
+function parseMora(token, withQ) {
+  if (!token) return null;
+  const gapFor = c => withQ ? geminateGapMs(c) : 0;
+  if (VOWELS.includes(token))
+    return { onset: null, nucleus: token, durationMs: 180, gapMs: gapFor(null), amplitude: 1, isN: false };
+  for (const c2 of ["sh","ts","ch","ky","gy","ny"]) {
+    if (token.startsWith(c2) && VOWELS.includes(token.slice(c2.length)))
+      return { onset: c2, nucleus: token.slice(c2.length), durationMs: 180, gapMs: gapFor(c2), amplitude: 1, isN: false };
+  }
+  if (token.length === 2 && CONSONANTS.includes(token[0]) && VOWELS.includes(token[1]))
+    return { onset: token[0], nucleus: token[1], durationMs: 180, gapMs: gapFor(token[0]), amplitude: 1, isN: false };
+  return null;
+}
+function playRomaji() {
+  ensureCtx();
+  const tokens = document.getElementById("romaji-input").value
+    .trim().toLowerCase().split(/[\s\-_]+/).filter(Boolean);
+  const moras = [];
+  let pendingQ = false;
+  for (const tk of tokens) {
+    if (tk === "q") { pendingQ = true; continue; }
+    if (tk === "n" || tk === "nn") {
+      moras.push({ onset: null, nucleus: "a", durationMs: 160,
+                   gapMs: pendingQ ? 70 : 0, amplitude: 1, isN: true });
+      pendingQ = false; continue;
+    }
+    const m = parseMora(tk, pendingQ);
+    if (m) moras.push(m);
+    pendingQ = false;
+  }
+  if (moras.length === 0) return;
+  const ev = { axes: lastAxes, moras, baseF0: 200, isRedup: false };
+  showResult(ev);
+  playEvent(ev);
+}
+document.getElementById("btn-romaji").addEventListener("click", playRomaji);
+document.getElementById("romaji-input").addEventListener("keydown", e => {
+  if (e.key === "Enter") playRomaji();
+});
+const romajiQuick = ["bo u ba", "ki ki", "a i u e o", "ka Q ka", "do N",
+                     "kya kyo", "cha pu cha pu", "shi N"];
+const rchips = document.getElementById("romaji-chips");
+for (const q of romajiQuick) {
+  const b = document.createElement("button");
+  b.textContent = q;
+  b.addEventListener("click", () => {
+    document.getElementById("romaji-input").value = q;
+    playRomaji();
+  });
+  rchips.appendChild(b);
+}
+
+// CLEAR (sketch + sliders リセット、log は保持 — iPad 版と同じ)
+document.getElementById("btn-clear").addEventListener("click", () => {
+  stopAll();
+  stroke = [];
+  presetShapePts = null;
+  redraw();
+  setSliders({ size: 0, sharp: 0, tex: 0, bright: 0 });
+  document.getElementById("result-word").textContent = "—";
+  document.getElementById("result-meta").textContent = "";
+  presetFirstTapDone.clear();
+  presetTapCounts.clear();
+});
+document.getElementById("btn-log-clear").addEventListener("click", () => {
+  logEntries.length = 0;
+  renderLog();
+});
+
+// ─── 起動 ───
+window.addEventListener("resize", resizeCanvas);
+resizeCanvas();
+// AudioContext は user gesture 後でないと使えないブラウザがあるため、
+// 最初の操作で ensureCtx しつつ、サンプルの fetch 自体は先行できる場合は先行する。
+document.addEventListener("pointerdown", function once() {
+  document.removeEventListener("pointerdown", once);
+  ensureCtx();
+  preloadAll();
+}, { once: true });
+document.getElementById("status").textContent = "画面をタップするとサンプル読込開始";
+</script>
+</body>
+</html>
