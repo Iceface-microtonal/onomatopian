@@ -572,9 +572,29 @@ function playEvent(event) {
 
 // ─── UI 状態 ───
 let lastAxes = { size: 0, sharp: 0, tex: 0, bright: 0 };
+// 直近に鳴った event (PLAY での正確なリピート用)。
+// スライダーは 0.01 刻みに量子化されるため、描画軸 (フル精度) から再生成すると
+// seed がズレて別の語になってしまう。PLAY は「最後の発声そのもの」を繰り返し、
+// スライダーを動かしたときだけ新規生成する。
+let lastEvent = null;
+let lastEventAxes = null;   // lastEvent を作ったときの軸 (変更検知用)
 let presetFirstTapDone = new Set();
 let presetTapCounts = new Map();
 const logEntries = [];   // { axes, romaji, f0, moras, isRedup }
+
+function axesEqual(a, b) {
+  if (!a || !b) return false;
+  return Math.abs(a.size - b.size) < 1e-9 && Math.abs(a.sharp - b.sharp) < 1e-9 &&
+         Math.abs(a.tex - b.tex) < 1e-9 && Math.abs(a.bright - b.bright) < 1e-9;
+}
+// event を「最後の発声」として記憶しつつ表示・再生する
+function playAndRemember(event, axesUsed, log) {
+  lastEvent = event;
+  lastEventAxes = { ...axesUsed };
+  showResult(event);
+  playEvent(event);
+  if (log) appendLog(event);
+}
 
 function setSliders(ax) {
   lastAxes = { ...ax };
@@ -622,8 +642,7 @@ function renderLog() {
     row.addEventListener("click", () => {
       setSliders(e.axes);
       const ev = { axes: e.axes, moras: e.moras, baseF0: e.f0, isRedup: e.isRedup };
-      showResult(ev);
-      playEvent(ev);
+      playAndRemember(ev, e.axes, false);   // PLAY で同じ語をリピート可能に
     });
     el.appendChild(row);
   }
@@ -633,9 +652,7 @@ function renderLog() {
 function generateAndPlay(axes, salt = 0, log = true) {
   const rand = mulberry32(axesSeed(axes, salt));
   const event = generate(axes, rand);
-  showResult(event);
-  playEvent(event);
-  if (log) appendLog(event);
+  playAndRemember(event, axes, log);
   return event;
 }
 
@@ -710,6 +727,14 @@ canvas.addEventListener("pointerup", ev => {
 
 // ─── TUNE / プリセット / ROMAJI / その他 UI 配線 ───
 document.getElementById("btn-play").addEventListener("click", () => {
+  ensureCtx();
+  // 軸が変わっていなければ「最後の発声そのもの」をリピート (描画直後の語を何度でも)。
+  // スライダーを動かした (= 軸が変わった) ときだけ新規生成する。
+  if (lastEvent && axesEqual(lastAxes, lastEventAxes)) {
+    showResult(lastEvent);
+    playEvent(lastEvent);
+    return;
+  }
   generateAndPlay(readSliders());
 });
 ["size","sharp","tex","bright"].forEach(id => {
@@ -748,9 +773,7 @@ for (const preset of PRESETS) {
       }));
       const f0 = Math.max(80, Math.min(400, 200 * (1 + 0.2 * preset.axes.bright - 0.2 * preset.axes.size)));
       const ev = { axes: preset.axes, moras, baseF0: f0, isRedup: false };
-      showResult(ev);
-      playEvent(ev);
-      appendLog(ev);
+      playAndRemember(ev, preset.axes, true);   // PLAY で正確発音をリピート可能に
     } else {
       // 2 回目以降: タップ回数 salt の変奏
       generateAndPlay(preset.axes, count);
@@ -792,8 +815,7 @@ function playRomaji() {
   }
   if (moras.length === 0) return;
   const ev = { axes: lastAxes, moras, baseF0: 200, isRedup: false };
-  showResult(ev);
-  playEvent(ev);
+  playAndRemember(ev, lastAxes, false);   // PLAY で同じ入力をリピート可能に
 }
 document.getElementById("btn-romaji").addEventListener("click", playRomaji);
 document.getElementById("romaji-input").addEventListener("keydown", e => {
@@ -819,6 +841,8 @@ document.getElementById("btn-clear").addEventListener("click", () => {
   presetShapePts = null;
   redraw();
   setSliders({ size: 0, sharp: 0, tex: 0, bright: 0 });
+  lastEvent = null;
+  lastEventAxes = null;
   document.getElementById("result-word").textContent = "—";
   document.getElementById("result-meta").textContent = "";
   presetFirstTapDone.clear();
