@@ -73,11 +73,15 @@
 
 <header>
   <span class="brand">ICEFACE</span><span class="pts">Onomatopian</span>
-  <button id="btn-clear" class="gray">✕ CLEAR</button>
+  <button id="btn-clear" class="gray" title="キャンバスを消去 / Clear the canvas">✕ <span id="t-eraser">消しゴム</span></button>
+  <a id="about-link" href="./about.html" style="
+    font-size: 10px; font-weight: 700; text-decoration: none;
+    border-radius: 4px; padding: 5px 9px;
+    background: rgba(77, 191, 242, 0.13); color: #1899c2;">？ <span id="t-about">解説</span></a>
   <span class="sub">Onomatopian — Phonosymbolic Topology Synthesizer (web)</span>
 </header>
 
-<!-- Loading banner (サンプル読込中の案内、完了後に自動で消える) -->
+<!-- Loading banner (サンプル読込中の案内、完了後に Voice 表示へ) -->
 <div id="loading-note" style="
   font-size: 11px; color: var(--pink); background: var(--pink-bg);
   border-radius: 6px; padding: 6px 10px; margin-bottom: 8px;
@@ -119,8 +123,8 @@
 <!-- Romaji direct input -->
 <div class="panel">
   <div class="row" style="margin-bottom:6px;">
-    <span class="panel-title">ROMAJI 直接入力</span>
-    <span class="hint" style="margin-left:auto;">空白区切り。促音=Q, 撥音=N (例 do N), 拗音=kya 等</span>
+    <span class="panel-title" id="t-romaji-title">ROMAJI 直接入力</span>
+    <span class="hint" style="margin-left:auto;" id="t-romaji-hint">空白区切り。促音=Q, 撥音=N (例 do N), 拗音=kya 等</span>
   </div>
   <div class="row">
     <input id="romaji-input" type="text" value="bo u ba" autocapitalize="off" autocomplete="off" spellcheck="false">
@@ -150,6 +154,37 @@
  * ============================================================ */
 
 const SAMPLE_BASE = "./Consonants/";   // wav の場所 (このフォルダ内、自己完結)
+
+// ─── 日英 UI テキスト (ブラウザ言語で自動判定、about.html とトグル選択を共有) ───
+let uiLang = null;
+try { uiLang = localStorage.getItem("onomatopian.lang"); } catch (e) {}
+if (uiLang !== "ja" && uiLang !== "en") {
+  uiLang = (navigator.language || "en").toLowerCase().startsWith("ja") ? "ja" : "en";
+}
+const T = uiLang === "ja" ? {
+  eraser: "消しゴム",
+  about: "解説",
+  loading: (n, total) => `♪ 音声サンプル読込中 ${n}/${total} — 音が出るまでしばらく時間がかかります`,
+  loadingInitial: "♪ 音声サンプル読込中… — 音が出るまでしばらく時間がかかります",
+  voice: "Voice(声): PuppeTwin",
+  romajiTitle: "ROMAJI 直接入力",
+  romajiHint: "空白区切り。促音=Q, 撥音=N (例 do N), 拗音=kya 等",
+} : {
+  eraser: "Eraser",
+  about: "About",
+  loading: (n, total) => `♪ Loading voice samples ${n}/${total} — sound will be ready in a moment`,
+  loadingInitial: "♪ Loading voice samples… — sound will be ready in a moment",
+  voice: "Voice: PuppeTwin",
+  romajiTitle: "ROMAJI input",
+  romajiHint: "space-separated morae. geminate=Q, moraic nasal=N (e.g. do N), kya/gyu etc.",
+};
+function applyLangTexts() {
+  document.getElementById("t-eraser").textContent = T.eraser;
+  document.getElementById("t-about").textContent = T.about;
+  document.getElementById("t-romaji-title").textContent = T.romajiTitle;
+  document.getElementById("t-romaji-hint").textContent = T.romajiHint;
+  document.getElementById("loading-note").textContent = T.loadingInitial;
+}
 
 // ─── 音素 inventory (PhonosymbolicEvent.swift と対応) ───
 const CONSONANTS = ["k","g","t","d","p","b","m","n","s","sh","ts","r","w",
@@ -484,8 +519,7 @@ async function fetchSample(key) {
   const el = document.getElementById("status");
   if (el) el.textContent = `loading ${samplesLoaded}/${samplesTotal}`;
   const note = document.getElementById("loading-note");
-  if (note) note.textContent =
-    `♪ 音声サンプル読込中 ${samplesLoaded}/${samplesTotal} — 音が出るまでしばらく時間がかかります`;
+  if (note) note.textContent = T.loading(samplesLoaded, samplesTotal);
 }
 let fetchAllPromise = null;
 function fetchAllSamples() {
@@ -874,6 +908,7 @@ document.getElementById("btn-log-clear").addEventListener("click", () => {
 // ─── 起動 ───
 window.addEventListener("resize", resizeCanvas);
 resizeCanvas();
+applyLangTexts();
 // fetch + decode はどちらも user gesture 不要 (AudioContext は suspended のまま
 // decode できる) → ページロード直後から全部済ませる。gesture が要るのは resume のみ。
 // バナーは「本当に鳴らせる状態」になるまで loading を表示し、さらに最低表示時間を
@@ -890,7 +925,7 @@ const loadStartTime = performance.now();
       // 準備完了: 声のクレジットを水色 (ピンクとの対比色) で常時表示
       note.style.color = "#1899c2";
       note.style.background = "rgba(77, 191, 242, 0.13)";
-      note.textContent = "Voice(声): PuppeTwin";
+      note.textContent = T.voice;
     }
     const ok = [...sampleBank.values()].filter(Boolean).length;
     document.getElementById("status").textContent = `samples ready (${ok}/${samplesTotal})`;
