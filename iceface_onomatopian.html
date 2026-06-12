@@ -402,18 +402,30 @@ function extractAxes(points, w, h) {
   let pathLen = 0;
   for (let i = 1; i < points.length; i++)
     pathLen += Math.hypot(points[i].x - points[i-1].x, points[i].y - points[i-1].y);
-  let folds = 0, prevSign = 0;
+  // v0.4: 「ころころ」「ぐるぐる」型の同方向ループは符号反転がほぼ起きず、
+  // 折返し+蛇行だけでは反復として検知できない。signed turning angle の総和
+  // (1 周ごとに ±2π 蓄積) を第 3 の反復シグナルとして加える。
+  // ジグザグは正負相殺で総回転 ≈ 0、単一円 (bouba) は 1 周 → 閾値以下で不発。
+  let folds = 0, prevSign = 0, totalTurning = 0;
   for (let i = 1; i < points.length - 1; i++) {
     const v1x = points[i].x - points[i-1].x, v1y = points[i].y - points[i-1].y;
     const v2x = points[i+1].x - points[i].x, v2y = points[i+1].y - points[i].y;
     const cross = v1x * v2y - v1y * v2x;
+    const dot = v1x * v2x + v1y * v2y;
+    if (Math.abs(cross) > 1e-9 || Math.abs(dot) > 1e-9) totalTurning += Math.atan2(cross, dot);
     if (Math.abs(cross) < 1e-9) continue;
     const sign = cross > 0 ? 1 : -1;
     if (prevSign !== 0 && sign !== prevSign) folds++;
     prevSign = sign;
   }
   const wiggle = pathLen / Math.max(bboxDiag, 1);
-  const tex = clamp((0.5 * Math.min(1, folds / 8) + 0.5 * Math.min(1, Math.max(0, (wiggle - 1) / 4))) * 2 - 1);
+  // 回転数: 1.25 周まではループとみなさない (単一円・弧の保護)、4 周で max
+  const rotations = Math.abs(totalTurning) / (2 * Math.PI);
+  const rotationNorm = Math.min(1, Math.max(0, (rotations - 1.25) / 2.75));
+  const texRaw = Math.max(
+    0.5 * Math.min(1, folds / 8) + 0.5 * Math.min(1, Math.max(0, (wiggle - 1) / 4)),
+    rotationNorm);
+  const tex = clamp(texRaw * 2 - 1);
 
   const meanY = points.reduce((a,p) => a + p.y, 0) / points.length;
   const bright = clamp(1 - 2 * (meanY / h));
