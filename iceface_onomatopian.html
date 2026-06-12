@@ -359,7 +359,9 @@ function generate(axes, rand, temperature = 0.4) {
   // 撥音 (ん) 末尾付与
   const nScore = 0.5 * axes.size + 0.3 * axes.sharp - 0.3 * axes.tex;
   const p = Math.max(0, Math.min(1, 0.15 + nScore * 0.30));
-  if (moras.length > 0 && rand() < p) {
+  // v0.5: 畳語・準畳語では終端 N を抑止 (N は単発衝撃音「どん/ばん」の音象徴。
+  // 反復語に付くと A B A° B° N で繰り返しの輪郭を壊す)
+  if (!isRedup && !quasiRedup && moras.length > 0 && rand() < p) {
     moras.push({ onset: null, nucleus: "a", durationMs: 160, gapMs: 0,
                  amplitude: 1.0, isN: true });
   }
