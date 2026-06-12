@@ -310,12 +310,24 @@ function geminateGapMs(c) {
   if (["z","j"].includes(c)) return 75;
   return 55; // m n r w y ny
 }
+// 準畳語の母音交替 (ablaut): 2 つ目の要素は暗く・重い母音へ
+// (がた→ごと、かさ→こそ、tik→tok)。出力は a/o のみなので母音制約に必ず適合。
+function ablautVowel(v) {
+  return { a: "o", i: "o", u: "a", e: "a", o: "a" }[v];
+}
 function generate(axes, rand, temperature = 0.4) {
   const rawCount = 2.0 + (axes.tex + 1.0) * 1.5;
   const moraCount = Math.max(1, Math.min(6, Math.round(rawCount)));
   const isRedup = axes.tex > 0.6;
   const geminateOn = (axes.tex > 0.6 && axes.sharp > 0.0) || axes.tex > 0.85;
-  const uniqueCount = isRedup ? Math.min(2, moraCount) : moraCount;
+  // v0.5: 準畳語 (gata-goto / tik-tok 型)。完全畳語に届かない 4 mora 以上の語を、
+  // 子音骨格 ABAB + 奇数サイクル母音交替の構造にして「繰り返し」と認識されやすくする。
+  let quasiRedup = false;
+  if (!isRedup && moraCount >= 4) {
+    const p = Math.min(0.85, 0.55 + 0.5 * Math.max(0, axes.tex));
+    quasiRedup = rand() < p;
+  }
+  const uniqueCount = (isRedup || quasiRedup) ? Math.min(2, moraCount) : moraCount;
 
   const unique = [];
   let prevOnset = undefined, firstVowel = null;
@@ -337,7 +349,9 @@ function generate(axes, rand, temperature = 0.4) {
     const needsGap = geminateOn && i === uniqueCount && uniqueCount < moraCount;
     const cycle = Math.floor(i / uniqueCount);
     const amp = (isRedup && cycle > 0) ? Math.max(0.7, 1.0 - 0.08 * cycle) : 1.0;
-    moras.push({ onset: u.onset, nucleus: u.nucleus, durationMs: u.durationMs,
+    // 準畳語: 奇数サイクルで母音を交替 (がた→ごと、tik→tok)。子音は保つ。
+    const nucleus = (quasiRedup && cycle % 2 === 1) ? ablautVowel(u.nucleus) : u.nucleus;
+    moras.push({ onset: u.onset, nucleus, durationMs: u.durationMs,
                  gapMs: needsGap ? geminateGapMs(u.onset) : 0,
                  amplitude: amp, isN: false });
   }
