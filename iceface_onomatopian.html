@@ -63,6 +63,13 @@
   .log-row .word { font-weight: 700; font-size: 11px; }
   .log-row .meta { color: var(--gray); margin-left: auto; }
   .hint { font-size: 9px; color: var(--gray); }
+  .vote { display: flex; gap: 4px; align-items: center; }
+  .vote button {
+    font-size: 17px; background: none; padding: 4px 7px; opacity: 0.45;
+    border-radius: 6px;
+  }
+  .vote button.sel { opacity: 1; background: var(--pink-bg); }
+  .vote button:disabled { opacity: 0.15; cursor: default; }
   #status { font-size: 9px; color: var(--gray); margin-left: auto; }
   .knob-row { display: flex; gap: 16px; flex-wrap: wrap; }
   .knob-row .knob { display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--gray); }
@@ -98,6 +105,10 @@
 <div class="panel">
   <div class="row">
     <div class="result-word" id="result-word">—</div>
+    <span class="vote">
+      <button id="btn-good" disabled title="イメージ通り / Sounds right">👍</button>
+      <button id="btn-bad" disabled title="イメージと違う / Sounds wrong">👎</button>
+    </span>
     <div class="result-meta" id="result-meta"></div>
   </div>
 </div>
@@ -131,6 +142,16 @@
     <button id="btn-romaji" class="primary">▶ PLAY</button>
   </div>
   <div class="chips" id="romaji-chips"></div>
+</div>
+
+<!-- Feedback (👍👎 の収集と書き出し) -->
+<div class="panel">
+  <div class="row">
+    <span class="panel-title">FEEDBACK (<span id="fb-count">0</span>)</span>
+    <span class="hint" id="t-fb-hint" style="margin-left:auto; text-align:right;"></span>
+    <button id="btn-fb-copy">COPY</button>
+    <button id="btn-fb-clear" class="gray">CLEAR</button>
+  </div>
 </div>
 
 <!-- Log -->
@@ -169,6 +190,8 @@ const T = uiLang === "ja" ? {
   voice: "Voice(声): PuppeTwin",
   romajiTitle: "ROMAJI 直接入力",
   romajiHint: "空白区切り。促音=Q, 撥音=N (例 do N), 拗音=kya 等",
+  fbHint: "👍👎 = イメージ通りか記録。COPY で書き出して開発に渡せます",
+  fbCopied: "COPIED!",
 } : {
   eraser: "Eraser",
   about: "About",
@@ -177,12 +200,15 @@ const T = uiLang === "ja" ? {
   voice: "Voice: PuppeTwin",
   romajiTitle: "ROMAJI input",
   romajiHint: "space-separated morae. geminate=Q, moraic nasal=N (e.g. do N), kya/gyu etc.",
+  fbHint: "👍👎 = did it sound like your shape? COPY exports for tuning",
+  fbCopied: "COPIED!",
 };
 function applyLangTexts() {
   document.getElementById("t-eraser").textContent = T.eraser;
   document.getElementById("t-about").textContent = T.about;
   document.getElementById("t-romaji-title").textContent = T.romajiTitle;
   document.getElementById("t-romaji-hint").textContent = T.romajiHint;
+  document.getElementById("t-fb-hint").textContent = T.fbHint;
   document.getElementById("loading-note").textContent = T.loadingInitial;
 }
 
@@ -667,10 +693,72 @@ function axesEqual(a, b) {
   return Math.abs(a.size - b.size) < 1e-9 && Math.abs(a.sharp - b.sharp) < 1e-9 &&
          Math.abs(a.tex - b.tex) < 1e-9 && Math.abs(a.bright - b.bright) < 1e-9;
 }
-// event を「最後の発声」として記憶しつつ表示・再生する
-function playAndRemember(event, axesUsed, log) {
+// ─── フィードバック収集 (👍👎) ───
+// 各発声を「発話レコード」として保持し、投票されたものだけ feedbackLog に蓄積。
+// localStorage に永続化し、COPY で JSON 書き出し → bias 表のデータ駆動調整に使う。
+// FEEDBACK_ENDPOINT に URL を設定すると、投票を 1 件ずつ POST 送信もする
+// (Google Apps Script 等で公開ユーザーから収集したい場合用。空なら何もしない)。
+const FEEDBACK_ENDPOINT = "";
+const FB_VERSION = 1;          // データ形式のバージョン (集計側の互換性確認用)
+let feedbackLog = [];
+try { feedbackLog = JSON.parse(localStorage.getItem("onomatopian.feedback") || "[]"); } catch (e) {}
+let utteranceSeq = 0;
+let currentUtterance = null;   // 投票対象 (直近の発声)
+
+function saveFeedback() {
+  if (feedbackLog.length > 500) feedbackLog = feedbackLog.slice(-500);
+  try { localStorage.setItem("onomatopian.feedback", JSON.stringify(feedbackLog)); } catch (e) {}
+  document.getElementById("fb-count").textContent = feedbackLog.length;
+}
+function setVoteButtons(enabled, sel) {
+  for (const [id, v] of [["btn-good", 1], ["btn-bad", -1]]) {
+    const b = document.getElementById(id);
+    b.disabled = !enabled;
+    b.classList.toggle("sel", sel === v);
+  }
+}
+function vote(verdict) {
+  if (!currentUtterance) return;
+  const u = currentUtterance;
+  // 同じ発話への再投票は上書き (👍→👎 の修正を許す)
+  const idx = feedbackLog.findIndex(r => r.id === u.id);
+  const rec = {
+    v: FB_VERSION, id: u.id, t: new Date().toISOString(), lang: uiLang,
+    src: u.src, word: u.word, mora: u.mora, redup: u.redup,
+    axes: u.axes, vote: verdict,
+  };
+  if (idx >= 0) feedbackLog[idx] = rec; else feedbackLog.push(rec);
+  saveFeedback();
+  setVoteButtons(true, verdict);
+  if (FEEDBACK_ENDPOINT) {
+    try {
+      fetch(FEEDBACK_ENDPOINT, { method: "POST", keepalive: true,
+        headers: { "Content-Type": "text/plain" }, body: JSON.stringify(rec) });
+    } catch (e) {}
+  }
+}
+
+// event を「最後の発声」として記憶しつつ表示・再生する。
+// src は発声の出どころ (draw/tune/preset/romaji/log) — フィードバック集計の文脈情報。
+function playAndRemember(event, axesUsed, log, src = "tune") {
   lastEvent = event;
   lastEventAxes = { ...axesUsed };
+  // 投票対象を更新 (再生のたびに新しい発話 ID。PLAY リピートでは更新しない)
+  utteranceSeq += 1;
+  currentUtterance = {
+    id: Date.now().toString(36) + "-" + utteranceSeq,
+    src,
+    word: romajiOf(event),
+    mora: event.moras.filter(m => !m.isSilentRest).length,
+    redup: !!event.isRedup,
+    axes: {
+      s: Math.round(axesUsed.size * 1000) / 1000,
+      sh: Math.round(axesUsed.sharp * 1000) / 1000,
+      t: Math.round(axesUsed.tex * 1000) / 1000,
+      b: Math.round(axesUsed.bright * 1000) / 1000,
+    },
+  };
+  setVoteButtons(true, null);
   showResult(event);
   playEvent(event);
   if (log) appendLog(event);
@@ -722,17 +810,17 @@ function renderLog() {
     row.addEventListener("click", () => {
       setSliders(e.axes);
       const ev = { axes: e.axes, moras: e.moras, baseF0: e.f0, isRedup: e.isRedup };
-      playAndRemember(ev, e.axes, false);   // PLAY で同じ語をリピート可能に
+      playAndRemember(ev, e.axes, false, "log");   // PLAY で同じ語をリピート可能に
     });
     el.appendChild(row);
   }
 }
 
 // 生成 + 再生 + ログ (決定的 seed)
-function generateAndPlay(axes, salt = 0, log = true) {
+function generateAndPlay(axes, salt = 0, log = true, src = "tune") {
   const rand = mulberry32(axesSeed(axes, salt));
   const event = generate(axes, rand);
-  playAndRemember(event, axes, log);
+  playAndRemember(event, axes, log, src);
   return event;
 }
 
@@ -800,7 +888,7 @@ canvas.addEventListener("pointerup", ev => {
     const hc = Number(document.getElementById("kn-hc").value);
     const ax = applyHandCorrection(raw, hc);
     setSliders(ax);
-    generateAndPlay(ax);   // 同じ描写 = 同じ語 (決定的)
+    generateAndPlay(ax, 0, true, "draw");   // 同じ描写 = 同じ語 (決定的)
   }
   ev.preventDefault();
 });
@@ -853,10 +941,10 @@ for (const preset of PRESETS) {
       }));
       const f0 = Math.max(80, Math.min(400, 200 * (1 + 0.2 * preset.axes.bright - 0.2 * preset.axes.size)));
       const ev = { axes: preset.axes, moras, baseF0: f0, isRedup: false };
-      playAndRemember(ev, preset.axes, true);   // PLAY で正確発音をリピート可能に
+      playAndRemember(ev, preset.axes, true, "preset");   // PLAY で正確発音をリピート可能に
     } else {
       // 2 回目以降: タップ回数 salt の変奏
-      generateAndPlay(preset.axes, count);
+      generateAndPlay(preset.axes, count, true, "preset");
     }
   });
   chipsEl.appendChild(b);
@@ -895,7 +983,7 @@ function playRomaji() {
   }
   if (moras.length === 0) return;
   const ev = { axes: lastAxes, moras, baseF0: 200, isRedup: false };
-  playAndRemember(ev, lastAxes, false);   // PLAY で同じ入力をリピート可能に
+  playAndRemember(ev, lastAxes, false, "romaji");   // PLAY で同じ入力をリピート可能に
 }
 document.getElementById("btn-romaji").addEventListener("click", playRomaji);
 document.getElementById("romaji-input").addEventListener("keydown", e => {
@@ -933,10 +1021,36 @@ document.getElementById("btn-log-clear").addEventListener("click", () => {
   renderLog();
 });
 
+// ─── フィードバック UI 配線 ───
+document.getElementById("btn-good").addEventListener("click", () => vote(1));
+document.getElementById("btn-bad").addEventListener("click", () => vote(-1));
+document.getElementById("btn-fb-copy").addEventListener("click", async () => {
+  const payload = JSON.stringify({
+    app: "onomatopian-web", fbVersion: FB_VERSION,
+    exported: new Date().toISOString(),
+    records: feedbackLog,
+  }, null, 1);
+  const btn = document.getElementById("btn-fb-copy");
+  try {
+    await navigator.clipboard.writeText(payload);
+    btn.textContent = T.fbCopied;
+  } catch (e) {
+    // clipboard が使えない環境: テキストを selection で出す代替
+    window.prompt("Copy:", payload);
+  }
+  setTimeout(() => { btn.textContent = "COPY"; }, 1500);
+});
+document.getElementById("btn-fb-clear").addEventListener("click", () => {
+  feedbackLog = [];
+  saveFeedback();
+  setVoteButtons(!!currentUtterance, null);
+});
+
 // ─── 起動 ───
 window.addEventListener("resize", resizeCanvas);
 resizeCanvas();
 applyLangTexts();
+document.getElementById("fb-count").textContent = feedbackLog.length;
 // fetch + decode はどちらも user gesture 不要 (AudioContext は suspended のまま
 // decode できる) → ページロード直後から全部済ませる。gesture が要るのは resume のみ。
 // バナーは「本当に鳴らせる状態」になるまで loading を表示し、さらに最低表示時間を
