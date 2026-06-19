@@ -361,7 +361,7 @@ function generate(axes, rand, temperature = 0.4) {
     const onset = pickConsonant(axes, prevOnset === undefined ? "" : prevOnset, temperature, rand);
     let restrict = null;
     if (onset && (PALATALIZED.has(onset) || SEMIVOWEL.has(onset))) restrict = new Set(["a","u","o"]);
-    else if (onset === "ch") restrict = new Set(["a","i","u","o"]);
+    // ch は cha/chi/chu/cho/che 全て収録済 (2026-06 に che 追加) → 全母音可。
     const nucleus = pickVowel(axes, isRedup ? firstVowel : null, temperature, restrict, rand);
     if (firstVowel === null) firstVowel = nucleus;
     unique.push({ onset, nucleus, durationMs: 170 + axes.size * 20,
@@ -553,7 +553,7 @@ function sampleKeys() {
   for (const c of CONSONANTS) {
     let vs = VOWELS;
     if (PALATALIZED.has(c) || SEMIVOWEL.has(c)) vs = ["a","u","o"];
-    else if (c === "ch") vs = ["a","i","u","o"];
+    // ch は che 収録済 → 全母音 preload (cv_che も含む)
     for (const v of vs) keys.push("cv_" + c + v);
   }
   for (const v of VOWELS) keys.push("v_" + v);
