@@ -68,8 +68,11 @@
     font-size: 17px; background: none; padding: 4px 7px; opacity: 0.45;
     border-radius: 6px;
   }
-  .vote button.sel { opacity: 1; background: var(--pink-bg); }
-  .vote button:disabled { opacity: 0.15; cursor: default; }
+  .vote button.sel { opacity: 1; background: var(--pink-bg2); box-shadow: 0 0 0 2px var(--pink); transform: scale(1.12); }
+  .vote button:disabled { opacity: 0.15; cursor: default; box-shadow: none; transform: none; }
+  #vote-msg { font-size: 11px; font-weight: 700; color: #1899c2; opacity: 0;
+              transition: opacity 0.25s; white-space: nowrap; margin-left: 2px; }
+  #vote-msg.show { opacity: 1; }
   #status { font-size: 9px; color: var(--gray); margin-left: auto; }
   .knob-row { display: flex; gap: 16px; flex-wrap: wrap; }
   .knob-row .knob { display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--gray); }
@@ -108,6 +111,7 @@
     <span class="vote">
       <button id="btn-good" disabled title="イメージ通り / Sounds right">👍</button>
       <button id="btn-bad" disabled title="イメージと違う / Sounds wrong">👎</button>
+      <span id="vote-msg"></span>
     </span>
     <div class="result-meta" id="result-meta"></div>
   </div>
@@ -192,6 +196,7 @@ const T = uiLang === "ja" ? {
   romajiHint: "空白区切り。促音=Q, 撥音=N (例 do N), 拗音=kya 等",
   fbHint: "👍👎 = イメージ通りか記録。COPY で書き出して開発に渡せます",
   fbCopied: "COPIED!",
+  fbSaved: (n) => `✓ 記録しました（計${n}件）`,
 } : {
   eraser: "Eraser",
   about: "About",
@@ -202,6 +207,7 @@ const T = uiLang === "ja" ? {
   romajiHint: "space-separated morae. geminate=Q, moraic nasal=N (e.g. do N), kya/gyu etc.",
   fbHint: "👍👎 = did it sound like your shape? COPY exports for tuning",
   fbCopied: "COPIED!",
+  fbSaved: (n) => `✓ saved (${n} total)`,
 };
 function applyLangTexts() {
   document.getElementById("t-eraser").textContent = T.eraser;
@@ -730,6 +736,14 @@ function vote(verdict) {
   if (idx >= 0) feedbackLog[idx] = rec; else feedbackLog.push(rec);
   saveFeedback();
   setVoteButtons(true, verdict);
+  // 記録確認: ボタン横に「✓ 記録しました（計N件）」を一瞬表示
+  const vm = document.getElementById("vote-msg");
+  if (vm) {
+    vm.textContent = T.fbSaved(feedbackLog.length);
+    vm.classList.add("show");
+    clearTimeout(window._voteMsgTimer);
+    window._voteMsgTimer = setTimeout(() => vm.classList.remove("show"), 1800);
+  }
   if (FEEDBACK_ENDPOINT) {
     try {
       fetch(FEEDBACK_ENDPOINT, { method: "POST", keepalive: true,
