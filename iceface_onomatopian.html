@@ -73,6 +73,11 @@
   #vote-msg { font-size: 11px; font-weight: 700; color: #1899c2; opacity: 0;
               transition: opacity 0.25s; white-space: nowrap; margin-left: 2px; }
   #vote-msg.show { opacity: 1; }
+  #loading-note.start-ready {
+    cursor: pointer; text-align: center; font-size: 14px; font-weight: 800;
+    color: #fff; background: var(--pink); padding: 12px 10px; user-select: none;
+  }
+  #loading-note.start-ready:active { background: var(--pink-bg2); color: var(--pink); }
   #status { font-size: 9px; color: var(--gray); margin-left: auto; }
   .knob-row { display: flex; gap: 16px; flex-wrap: wrap; }
   .knob-row .knob { display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--gray); }
@@ -197,6 +202,7 @@ const T = uiLang === "ja" ? {
   fbHint: "👍👎 = イメージ通りか記録。COPY で書き出して開発に渡せます",
   fbCopied: "COPIED!",
   fbSaved: (n) => `✓ 記録しました（計${n}件）`,
+  start: "▶ タップして開始 (音を有効化)",
 } : {
   eraser: "Eraser",
   about: "About",
@@ -208,6 +214,7 @@ const T = uiLang === "ja" ? {
   fbHint: "👍👎 = did it sound like your shape? COPY exports for tuning",
   fbCopied: "COPIED!",
   fbSaved: (n) => `✓ saved (${n} total)`,
+  start: "▶ Tap to Start (enable sound)",
 };
 function applyLangTexts() {
   document.getElementById("t-eraser").textContent = T.eraser;
@@ -1069,24 +1076,42 @@ document.getElementById("fb-count").textContent = feedbackLog.length;
 // decode できる) → ページロード直後から全部済ませる。gesture が要るのは resume のみ。
 // バナーは「本当に鳴らせる状態」になるまで loading を表示し、さらに最低表示時間を
 // 保証する (早すぎる「準備完了」で戸惑わないように)。
-const MIN_LOADING_MS = 3000;
-const loadStartTime = performance.now();
+// 読込 (fetch+decode) はページロード直後に。完了したら「▶ タップして開始」ボタンを出す。
+// その明示タップで AudioContext を resume (確実な user gesture) → 以降は描いた瞬間に鳴る。
 (async () => {
   await fetchAllSamples();
   try { await Promise.all(sampleKeys().map(decodeSample)); } catch (e) {}
-  const wait = Math.max(0, MIN_LOADING_MS - (performance.now() - loadStartTime));
-  setTimeout(() => {
-    const note = document.getElementById("loading-note");
-    if (note) {
-      // 準備完了: 声のクレジットを水色 (ピンクとの対比色) で常時表示
-      note.style.color = "#1899c2";
-      note.style.background = "rgba(77, 191, 242, 0.13)";
-      note.textContent = T.voice;
-    }
-    const ok = [...sampleBank.values()].filter(Boolean).length;
-    document.getElementById("status").textContent = `samples ready (${ok}/${samplesTotal})`;
-  }, wait);
+  const ok = [...sampleBank.values()].filter(Boolean).length;
+  document.getElementById("status").textContent = `samples ready (${ok}/${samplesTotal})`;
+  showStartButton();
 })();
+
+function showStartButton() {
+  const note = document.getElementById("loading-note");
+  if (!note) return;
+  note.textContent = T.start;
+  // インライン style が CSS class より優先されるので、目立つボタン見た目を inline で設定
+  Object.assign(note.style, { background: "var(--pink)", color: "#fff", cursor: "pointer",
+    textAlign: "center", fontWeight: "800", fontSize: "15px", padding: "13px 10px" });
+  note.onclick = startApp;
+}
+function startApp() {
+  const note = document.getElementById("loading-note");
+  const ctx = ensureCtx();              // user gesture 内で生成/取得
+  try {                                 // WebKit 古典アンロック (無音1サンプル即再生)
+    const b = ctx.createBuffer(1, 1, 22050);
+    const s = ctx.createBufferSource(); s.buffer = b; s.connect(ctx.destination); s.start(0);
+  } catch (e) {}
+  const finish = () => {
+    if (!note) return;
+    note.onclick = null;
+    // 開始後は声のクレジット表示 (元の控えめな見た目に戻す)
+    Object.assign(note.style, { background: "rgba(77, 191, 242, 0.13)", color: "#1899c2",
+      cursor: "default", textAlign: "left", fontWeight: "normal", fontSize: "11px", padding: "6px 10px" });
+    note.textContent = T.voice;
+  };
+  ctx.resume().then(finish).catch(finish);
+}
 // AudioContext のアンロック: iOS/macOS Safari は一部イベントしか user activation と
 // 認めないため、複数イベントで試みる (running になったら全て解除)。
 // resume() に加え、ジェスチャーハンドラ内での無音バッファ即時再生 (WebKit の古典的
