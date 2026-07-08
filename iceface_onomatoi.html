@@ -192,7 +192,7 @@
  *  - CV→V diph (diph_<v1><v2>.mp3 をそのまま使う簡易版) — かい/こう等の語末連続母音。
  * ============================================================ */
 
-const SAMPLE_BASE = "./ConsonantsOnomatoi/";   // mp3 の場所 (このフォルダ内、自己完結)
+const SAMPLE_BASE = "./ConsonantsOnomatoi/";   // wav の場所 (開発用: プロジェクト内参照)
 
 // ─── 日英 UI テキスト (ブラウザ言語で自動判定、about.html とトグル選択を共有) ───
 let uiLang = null;
@@ -601,7 +601,7 @@ function romajiOf(event) {
   let s = "";
   for (const m of event.moras) {
     if (m.gapMs > 0) s += "Q";
-    if (m.isN) s += "N";
+    if (m.isN) s += "n";
     else s += (m.onset ?? "") + m.nucleus;
     if (m.isQ) s += "Q";
   }
@@ -1309,8 +1309,8 @@ document.getElementById("btn-romaji").addEventListener("click", playRomaji);
 document.getElementById("romaji-input").addEventListener("keydown", e => {
   if (e.key === "Enter") playRomaji();
 });
-const romajiQuick = ["bo u ba", "ki ki", "a i u e o", "ka Q ka", "do N",
-                     "kya kyo", "cha pu cha pu", "shi N"];
+const romajiQuick = ["bo u ba", "ki ki", "a i u e o", "ka Q ka", "do n",
+                     "kya kyo", "cha pu cha pu", "shi n"];
 const rchips = document.getElementById("romaji-chips");
 for (const q of romajiQuick) {
   const b = document.createElement("button");
