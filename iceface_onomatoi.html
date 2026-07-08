@@ -886,10 +886,14 @@ function analyzeMoras(moras) {
       let root = i - 1;
       while (root > 0 && moras[root].onset === null && !moras[root].isN &&
              moras[root].nucleus === moras[root - 1].nucleus) root--;
-      plan[i] = { kind: "chainMember", rootIndex: root };
-      if (plan[root].kind === "normal") plan[root] = { kind: "chainRoot", memberEnd: i };
-      else if (plan[root].kind === "chainRoot") plan[root].memberEnd = i;
-      continue;
+      // root がすでに別種 (diphPartner/contN 等) に割り当て済みなら、その root へは
+      // 延長できない (root 自体が別サンプルを鳴らす)。無音で脱落させるより、
+      // このモーラ単体を通常再生する方が安全 (自由入力の romaji はどんな並びも来る)。
+      if (plan[root].kind === "normal" || plan[root].kind === "chainRoot") {
+        plan[i] = { kind: "chainMember", rootIndex: root };
+        plan[root] = { kind: "chainRoot", memberEnd: i };
+        continue;
+      }
     }
     if (i > 0 && m.onset === null && moras[i - 1].onset !== null && !moras[i - 1].isN &&
         moras[i - 1].nucleus !== m.nucleus && diphBufferFor(moras[i - 1].nucleus, m.nucleus)) {
