@@ -1,0 +1,1437 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Iceface Onomatoi</title>
+<style>
+  :root {
+    --pink: #e8488a;
+    --pink-bg: rgba(232, 72, 138, 0.10);
+    --pink-bg2: rgba(232, 72, 138, 0.18);
+    --gray: #888;
+    --border: rgba(0,0,0,0.10);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  body {
+    font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    background: #fff; color: #111;
+    padding: 10px; max-width: 900px; margin: 0 auto;
+  }
+  header { display: flex; align-items: baseline; gap: 8px; padding: 6px 2px 10px; }
+  header .brand { font-size: 12px; font-weight: 800; color: var(--gray); }
+  header .pts { font-size: 14px; font-weight: 800; color: var(--pink); }
+  header .sub { margin-left: auto; font-size: 9px; color: var(--gray); }
+  .panel {
+    background: #fff; border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px; margin-bottom: 8px;
+  }
+  .panel-title { font-size: 10px; font-weight: 800; color: var(--pink); letter-spacing: 0.5px; }
+  #canvas {
+    width: 100%; height: 260px; display: block; border: 1px solid var(--pink-bg2);
+    border-radius: 8px; touch-action: none; cursor: crosshair; background: #fff;
+  }
+  .row { display: flex; align-items: center; gap: 8px; }
+  .result-word { font-size: 30px; font-weight: 700; min-height: 38px; word-break: break-all; }
+  .result-meta { margin-left: auto; text-align: right; font-size: 11px; color: var(--gray); white-space: nowrap; }
+  .axis-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+  .axis-row label { width: 64px; font-size: 10px; color: var(--gray); }
+  .axis-row input[type=range] { flex: 1; accent-color: var(--pink); }
+  .axis-row .val { width: 48px; text-align: right; font-size: 10px; color: var(--gray); }
+  button {
+    font-family: inherit; font-size: 10px; font-weight: 700;
+    border: none; border-radius: 4px; padding: 5px 10px; cursor: pointer;
+    background: var(--pink-bg); color: var(--pink);
+  }
+  button:active { background: var(--pink-bg2); }
+  button.primary { background: var(--pink); color: #fff; padding: 8px 16px; font-size: 12px; }
+  button.gray { background: rgba(0,0,0,0.06); color: var(--gray); }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .chips button { font-size: 9px; font-weight: 500; }
+  #romaji-input {
+    flex: 1; font-family: inherit; font-size: 14px; padding: 8px 10px;
+    border: 1.5px solid var(--pink-bg2); border-radius: 7px; outline: none;
+  }
+  #romaji-input:focus { border-color: var(--pink); }
+  #log { max-height: 160px; overflow-y: auto; margin-top: 6px; }
+  .log-row {
+    display: flex; gap: 8px; align-items: baseline; font-size: 10px;
+    padding: 2px 0; cursor: pointer; border-radius: 3px;
+  }
+  .log-row:hover { background: var(--pink-bg); }
+  .log-row .axes { color: var(--gray); width: 150px; flex-shrink: 0; }
+  .log-row .word { font-weight: 700; font-size: 11px; }
+  .log-row .meta { color: var(--gray); margin-left: auto; }
+  .hint { font-size: 9px; color: var(--gray); }
+  .vote { display: flex; gap: 4px; align-items: center; }
+  .vote button {
+    font-size: 17px; background: none; padding: 4px 7px; opacity: 0.45;
+    border-radius: 6px;
+  }
+  .vote button.sel { opacity: 1; background: var(--pink-bg2); box-shadow: 0 0 0 2px var(--pink); transform: scale(1.12); }
+  .vote button:disabled { opacity: 0.15; cursor: default; box-shadow: none; transform: none; }
+  #vote-msg { font-size: 11px; font-weight: 700; color: #1899c2; opacity: 0;
+              transition: opacity 0.25s; white-space: nowrap; margin-left: 2px; }
+  #vote-msg.show { opacity: 1; }
+  #loading-note.start-ready {
+    cursor: pointer; text-align: center; font-size: 14px; font-weight: 800;
+    color: #fff; background: var(--pink); padding: 12px 10px; user-select: none;
+  }
+  #loading-note.start-ready:active { background: var(--pink-bg2); color: var(--pink); }
+  #status { font-size: 9px; color: var(--gray); margin-left: auto; }
+  .knob-row { display: flex; gap: 16px; flex-wrap: wrap; }
+  .knob-row .knob { display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--gray); }
+  .knob-row input[type=range] { width: 110px; accent-color: var(--pink); }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="brand">ICEFACE</span><span class="pts">Onomatoi</span>
+  <button id="btn-clear" class="gray" title="キャンバスを消去 / Clear the canvas">✕ <span id="t-eraser">消しゴム</span></button>
+  <a id="about-link" href="./about_onomatoi.html" style="
+    font-size: 10px; font-weight: 700; text-decoration: none;
+    border-radius: 4px; padding: 5px 9px;
+    background: rgba(77, 191, 242, 0.13); color: #1899c2;">？ <span id="t-about">解説</span></a>
+  <span class="sub">Onomatoi — Phonosymbolic Topology Synthesizer (web)</span>
+</header>
+
+<!-- Loading banner (サンプル読込中の案内、完了後に Voice 表示へ) -->
+<div id="loading-note" style="
+  font-size: 11px; color: var(--pink); background: var(--pink-bg);
+  border-radius: 6px; padding: 6px 10px; margin-bottom: 8px;
+  transition: opacity 0.6s;">
+  ♪ 音声サンプル読込中… — 音が出るまでしばらく時間がかかります
+</div>
+
+<!-- Sketch canvas -->
+<div class="panel" style="padding:0; border:none;">
+  <canvas id="canvas"></canvas>
+</div>
+
+<!-- Result -->
+<div class="panel">
+  <div class="row">
+    <div class="result-word" id="result-word">—</div>
+    <span class="vote">
+      <button id="btn-good" disabled title="イメージ通り / Sounds right">👍</button>
+      <button id="btn-bad" disabled title="イメージと違う / Sounds wrong">👎</button>
+      <span id="vote-msg"></span>
+    </span>
+    <div class="result-meta" id="result-meta"></div>
+  </div>
+</div>
+
+<!-- Tuning -->
+<div class="panel">
+  <div class="row">
+    <span class="panel-title">TUNE</span>
+    <span id="status"></span>
+    <button id="btn-play" class="primary" style="margin-left:8px;">▶ PLAY</button>
+  </div>
+  <div class="axis-row"><label>size</label><input type="range" id="ax-size" min="-1" max="1" step="0.01" value="0"><span class="val" id="val-size">+0.00</span></div>
+  <div class="axis-row"><label>sharp</label><input type="range" id="ax-sharp" min="-1" max="1" step="0.01" value="0"><span class="val" id="val-sharp">+0.00</span></div>
+  <div class="axis-row"><label>texture</label><input type="range" id="ax-tex" min="-1" max="1" step="0.01" value="0"><span class="val" id="val-tex">+0.00</span></div>
+  <div class="axis-row"><label>bright</label><input type="range" id="ax-bright" min="-1" max="1" step="0.01" value="0"><span class="val" id="val-bright">+0.00</span></div>
+  <div class="chips" id="preset-chips"></div>
+  <div class="knob-row" style="margin-top:10px;">
+    <span class="knob">bpm <input type="range" id="kn-bpm" min="40" max="240" step="1" value="140"><span id="val-bpm">140</span></span>
+    <span class="knob">hand corr <input type="range" id="kn-hc" min="0" max="1.5" step="0.05" value="0.5"><span id="val-hc">0.50</span></span>
+  </div>
+</div>
+
+<!-- Romaji direct input -->
+<div class="panel">
+  <div class="row" style="margin-bottom:6px;">
+    <span class="panel-title" id="t-romaji-title">ROMAJI 直接入力</span>
+    <span class="hint" style="margin-left:auto;" id="t-romaji-hint">空白区切り。促音=Q, 撥音=N (例 do N), 拗音=kya 等</span>
+  </div>
+  <div class="row">
+    <input id="romaji-input" type="text" value="bo u ba" autocapitalize="off" autocomplete="off" spellcheck="false">
+    <button id="btn-romaji" class="primary">▶ PLAY</button>
+  </div>
+  <div class="chips" id="romaji-chips"></div>
+</div>
+
+<!-- Feedback (👍👎 の収集と書き出し) -->
+<div class="panel">
+  <div class="row">
+    <span class="panel-title">FEEDBACK (<span id="fb-count">0</span>)</span>
+    <span class="hint" id="t-fb-hint" style="margin-left:auto; text-align:right;"></span>
+    <button id="btn-fb-copy">COPY</button>
+    <button id="btn-fb-clear" class="gray">CLEAR</button>
+  </div>
+</div>
+
+<!-- Log -->
+<div class="panel">
+  <div class="row">
+    <span class="panel-title">LOG (<span id="log-count">0</span>)</span>
+    <button id="btn-log-clear" class="gray" style="margin-left:auto;">CLEAR</button>
+  </div>
+  <div id="log"></div>
+</div>
+
+<script>
+"use strict";
+/* ============================================================
+ * ICEFACE Onomatoi — Web version (2026-07-08, core v7 移植)
+ * iPad/Mac 版 OnomatoiCore からの忠実な移植 (簡易化した点):
+ *  - 音程変化なし: Resources/Consonants の base wav のみ (pitch variants 不使用)
+ *  - warabe (旋律) モードなし / COMPOSE モードなし
+ *  - 促音は無音 gap のみ (V-Q / 摩擦延長サンプル不使用)
+ * 生成ロジック (bias 表 v0.4 / nil-onset / ch 制限 / 決定的 seed) は本体と同一。
+ * v7 追加移植 (PhonosymbolicEvent.Onomatopoeia.legalize / FormantSynth Audio v1-v7.9):
+ *  - legalize(): 任意のモーラ列を実在オノマトペ型 (畳語/り/ん/ー/っ/どーん/がたごと/かい/こう…)
+ *    へ整形する層。これが「Onomatoi らしさ」の核 (音声パイプラインは別途 v7 と対で実装)。
+ *  - 長母音サステイン (loopStart/loopEnd ネイティブループ、ゼロクロス近傍) — ー終わりの語が
+ *    途中で無音化しないように (旧 Consonants/*.mp3 は 2.0s ファイル中 0.3s しか実音が無かった
+ *    デノイズのゲート事故があり、Resources 側は修正済み。Web 側 mp3 も再生成時に末尾トリム済み)。
+ *  - 継続撥音 (v_<v>_nn.mp3, prepareContN 相当の頭-19dB→尾-17.5dB 整形を事前ベイク) — 語中の
+ *    ん (どーん/ふんわり) を n_N.mp3 でなく前母音から続けて鳴らす。
+ *  - CV→V diph (diph_<v1><v2>.mp3 をそのまま使う簡易版) — かい/こう等の語末連続母音。
+ * ============================================================ */
+
+const SAMPLE_BASE = "./ConsonantsOnomatoi/";   // mp3 の場所 (このフォルダ内、自己完結)
+
+// ─── 日英 UI テキスト (ブラウザ言語で自動判定、about.html とトグル選択を共有) ───
+let uiLang = null;
+try { uiLang = localStorage.getItem("onomatoi.lang"); } catch (e) {}
+if (uiLang !== "ja" && uiLang !== "en") {
+  uiLang = (navigator.language || "en").toLowerCase().startsWith("ja") ? "ja" : "en";
+}
+const T = uiLang === "ja" ? {
+  eraser: "消しゴム",
+  about: "解説",
+  loading: (n, total) => `♪ 音声サンプル読込中 ${n}/${total} — 音が出るまでしばらく時間がかかります`,
+  loadingInitial: "♪ 音声サンプル読込中… — 音が出るまでしばらく時間がかかります",
+  voice: "Voice(声): PuppeTwin",
+  romajiTitle: "ROMAJI 直接入力",
+  romajiHint: "空白区切り。促音=Q, 撥音=N (例 do N), 拗音=kya 等",
+  fbHint: "👍👎 = イメージ通りか記録。COPY で書き出して開発に渡せます",
+  fbCopied: "COPIED!",
+  fbSaved: (n) => `✓ 記録しました（計${n}件）`,
+  start: "▶ タップして開始 (音を有効化)",
+} : {
+  eraser: "Eraser",
+  about: "About",
+  loading: (n, total) => `♪ Loading voice samples ${n}/${total} — sound will be ready in a moment`,
+  loadingInitial: "♪ Loading voice samples… — sound will be ready in a moment",
+  voice: "Voice: PuppeTwin",
+  romajiTitle: "ROMAJI input",
+  romajiHint: "space-separated morae. geminate=Q, moraic nasal=N (e.g. do N), kya/gyu etc.",
+  fbHint: "👍👎 = did it sound like your shape? COPY exports for tuning",
+  fbCopied: "COPIED!",
+  fbSaved: (n) => `✓ saved (${n} total)`,
+  start: "▶ Tap to Start (enable sound)",
+};
+function applyLangTexts() {
+  document.getElementById("t-eraser").textContent = T.eraser;
+  document.getElementById("t-about").textContent = T.about;
+  document.getElementById("t-romaji-title").textContent = T.romajiTitle;
+  document.getElementById("t-romaji-hint").textContent = T.romajiHint;
+  document.getElementById("t-fb-hint").textContent = T.fbHint;
+  document.getElementById("loading-note").textContent = T.loadingInitial;
+}
+
+// ─── 音素 inventory (PhonosymbolicEvent.swift と対応) ───
+const CONSONANTS = ["k","g","t","d","p","b","m","n","s","sh","ts","r","w",
+                    "ky","gy","ny","h","f","y","z","j","ch"];
+const VOWELS = ["a","i","u","e","o"];
+const VOICED = new Set(["g","d","b","m","n","r","w","gy","ny","y","z","j"]);
+const PALATALIZED = new Set(["ky","gy","ny"]);   // a/u/o のみ
+const SEMIVOWEL = new Set(["y"]);                // a/u/o のみ
+
+// ─── bias 表 v0.4 (CVGenerator.swift §2) ───
+const CONSONANT_BIAS = {
+  k:  { size: -0.4,  sharp: 0.80, tex: 0.0,  bright:  0.3 },
+  g:  { size:  0.6,  sharp: 0.50, tex: 0.0,  bright: -0.3 },
+  t:  { size: -0.2,  sharp: 0.70, tex: 0.0,  bright:  0.0 },
+  d:  { size:  0.4,  sharp: 0.35, tex: 0.0,  bright: -0.2 },
+  p:  { size: -0.3,  sharp: 0.40, tex: 0.0,  bright:  0.0 },
+  b:  { size:  0.5,  sharp: 0.15, tex: 0.0,  bright: -0.3 },
+  m:  { size:  0.20, sharp: -0.70, tex: 0.0, bright: -0.3 },
+  n:  { size:  0.10, sharp: -0.60, tex: 0.0, bright:  0.0 },
+  s:  { size: -0.3,  sharp: 0.60, tex: 0.0,  bright:  0.6 },
+  sh: { size:  0.0,  sharp: 0.30, tex: 0.0,  bright: -0.2 },
+  ts: { size: -0.2,  sharp: 0.80, tex: 0.3,  bright:  0.2 },
+  r:  { size:  0.0,  sharp: -0.20, tex: 0.5, bright:  0.0 },
+  w:  { size:  0.3,  sharp: -0.60, tex: 0.0, bright: -0.4 },
+  ky: { size: -0.5,  sharp: 0.70, tex: 0.0,  bright:  0.65 },
+  gy: { size:  0.30, sharp: 0.40, tex: 0.10, bright:  0.0 },
+  ny: { size:  0.0,  sharp: -0.50, tex: 0.10, bright: 0.30 },
+  h:  { size: -0.20, sharp: -0.10, tex: 0.10, bright: 0.20 },
+  f:  { size: -0.10, sharp: -0.20, tex: 0.15, bright: 0.0 },
+  y:  { size:  0.10, sharp: -0.55, tex: 0.20, bright: 0.50 },
+  z:  { size:  0.20, sharp: 0.20, tex: 0.40,  bright: 0.20 },
+  j:  { size:  0.30, sharp: 0.10, tex: 0.45,  bright: 0.10 },
+  ch: { size: -0.35, sharp: 0.70, tex: 0.15,  bright: 0.25 },  // bias v2
+};
+const VOWEL_BIAS = {
+  a: { size:  0.80, sharp:  0.0, bright: -0.30 },
+  o: { size:  0.55, sharp: -0.3, bright: -0.70 },
+  u: { size:  0.20, sharp: -0.4, bright: -0.50 },
+  e: { size: -0.30, sharp:  0.0, bright:  0.60 },
+  i: { size: -0.85, sharp:  0.3, bright:  0.90 },
+};
+// nil-onset (単独母音) スコア v0.4
+const NIL_BASE = -0.68, NIL_SHARP_PENALTY = 1.45, NIL_DULL_BONUS = 0.0;
+
+// ─── 決定的 RNG (同じ描写 = 同じシニフィアン) ───
+function axesSeed(ax, salt) {
+  // 1e-4 量子化 + FNV-1a 32bit (Swift 版 deterministicSeed の 32bit 簡易版)
+  let h = 0x811c9dc5 ^ (salt >>> 0);
+  for (const v of [ax.size, ax.sharp, ax.tex, ax.bright]) {
+    const q = Math.round(v * 10000) | 0;
+    h ^= (q >>> 0);
+    h = Math.imul(h, 0x01000193);
+    h ^= h >>> 13;
+  }
+  return h >>> 0;
+}
+function mulberry32(seed) {
+  let s = seed >>> 0;
+  return function() {
+    s = (s + 0x6D2B79F5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// ─── CVGenerator (Swift v0.4 の移植) ───
+function scoreAgainst(target, bias) {
+  return -(0.7 * Math.abs(bias.size - target.size)
+         + Math.abs(bias.sharp - target.sharp)
+         + Math.abs(bias.bright - target.bright));
+}
+function softmaxSample(scores, temperature, rand) {
+  if (scores.length === 0) return null;
+  if (temperature < 1e-3) {
+    let best = scores[0];
+    for (const s of scores) if (s[1] > best[1]) best = s;
+    return best[0];
+  }
+  const maxS = Math.max(...scores.map(s => s[1]));
+  const exps = scores.map(s => [s[0], Math.exp((s[1] - maxS) / temperature)]);
+  const sum = exps.reduce((a, e) => a + e[1], 0);
+  if (sum <= 0) return scores[0][0];
+  const r = rand();
+  let cum = 0;
+  for (const [item, e] of exps) {
+    cum += e / sum;
+    if (r < cum) return item;
+  }
+  return exps[exps.length - 1][0];
+}
+function pickConsonant(target, prevOnset, temperature, rand) {
+  const scores = [];
+  // nil-onset 候補 (sharpness 中心スコア v0.4)
+  let nilScore = NIL_BASE
+               - NIL_SHARP_PENALTY * Math.max(0, target.sharp)
+               + NIL_DULL_BONUS * Math.max(0, -target.sharp);
+  if (prevOnset === null) nilScore -= 0.4;     // 連続 V 抑制
+  scores.push([null, nilScore]);
+  for (const c of CONSONANTS) {
+    let s = scoreAgainst(target, CONSONANT_BIAS[c]);
+    if (prevOnset === c) s -= 0.3;             // 同子音連続ペナルティ
+    scores.push([c, s]);
+  }
+  return softmaxSample(scores, temperature, rand);
+}
+function pickVowel(target, redupFirst, temperature, restrict, rand) {
+  const scores = [];
+  for (const v of VOWELS) {
+    if (restrict && !restrict.has(v)) continue;
+    let s = scoreAgainst(target, VOWEL_BIAS[v]);
+    if (redupFirst && redupFirst === v) s += 0.3;
+    scores.push([v, s]);
+  }
+  return softmaxSample(scores, temperature, rand) ?? "a";
+}
+function geminateGapMs(c) {
+  if (c === null) return 70;
+  if (["k","t","p","ky","ch"].includes(c)) return 110;
+  if (["s","sh","ts","h","f"].includes(c)) return 65;
+  if (["g","d","b","gy"].includes(c)) return 85;
+  if (["z","j"].includes(c)) return 75;
+  return 55; // m n r w y ny
+}
+// 準畳語の母音交替 (ablaut): 2 つ目の要素は暗く・重い母音へ
+// (がた→ごと、かさ→こそ、tik→tok)。出力は a/o のみなので母音制約に必ず適合。
+function ablautVowel(v) {
+  return { a: "o", i: "o", u: "a", e: "a", o: "a" }[v];
+}
+
+// ─── Onomatopoeia.legalize (PhonosymbolicEvent.swift の移植, 2026-07-06 v7) ───
+// 任意のモーラ列を「実在しそうな日本語の擬音語」の形態テンプレートへ整形する純関数。
+// mora shape: { onset: string|null, nucleus: "a"|"i"|"u"|"e"|"o", durationMs, gapMs,
+//               amplitude, isN: bool, isQ: bool (語末促音「っ」, 旧 isFinalSokuon) }
+const OBSTRUENT_EXEMPT = new Set(["m", "n", "r", "w", "y", "ny"]);
+function isObstruent(c) { return c !== null && !OBSTRUENT_EXEMPT.has(c); }
+const VOICED_FORM = { k: "g", t: "d", p: "b", s: "z", sh: "j", ts: "z", ch: "j", h: "b", f: "b", ky: "gy" };
+const VOICELESS_FORM = { g: "k", d: "t", b: "p", z: "s", j: "sh", gy: "ky" };
+
+function stripGap(m) { return m.gapMs > 0 ? { ...m, gapMs: 0 } : m; }
+function gapMora(m) { return { ...m, gapMs: geminateGapMs(m.onset) }; }
+function cvMora(c, v) {
+  return { onset: c, nucleus: v, durationMs: 180, gapMs: 0, amplitude: 1.0, isN: false, isQ: false };
+}
+function moraicNMora() {
+  return { onset: null, nucleus: "a", durationMs: 160, gapMs: 0, amplitude: 1.0, isN: true, isQ: false };
+}
+function heldVowelMora(v) {
+  return { onset: null, nucleus: v, durationMs: 180, gapMs: 0, amplitude: 1.0, isN: false, isQ: false };
+}
+// 語末促音「っ」。低リスク近似: 短い持続(60ms)+小さい振幅(0.18)で「急な途切れ」を作る。
+function finalSokuonMora(v) {
+  return { onset: null, nucleus: v, durationMs: 60, gapMs: 0, amplitude: 0.18, isN: false, isQ: true };
+}
+// 清濁を重さ(size)へ寄せる (擬音語の核: ごろ↔ころ, ざらざら↔さらさら)。阻害音のみ・中庸は不変。
+function biasVoicing(m, size) {
+  if (m.onset === null || !isObstruent(m.onset)) return m;
+  const voiced = VOICED.has(m.onset);
+  let nc = null;
+  if (size > 0.5) nc = voiced ? null : (VOICED_FORM[m.onset] ?? null);
+  else if (size < -0.5) nc = voiced ? (VOICELESS_FORM[m.onset] ?? null) : null;
+  if (nc === null) return m;
+  return { ...m, onset: nc };
+}
+// 語頭 /p/ 積極バイアス: crisp+bright のとき、語頭の唇音(h/f/b)を /p/ へ (は→ぱ・ふ→ぷ・ば→ぱ)。
+function biasInitialP(m, axes) {
+  if (!(axes.sharp > 0.35 && axes.bright > 0.0)) return m;
+  if (!(m.onset === "h" || m.onset === "f" || m.onset === "b")) return m;
+  return { ...m, onset: "p" };
+}
+// 外来拍・非オノマトペ拍を実在の仮名へ写像 (制約アプリの「文字のらしさ」)。
+function nativize(m) {
+  if (m.onset === null) return m;
+  const c = m.onset, v = m.nucleus;
+  let nc = c;
+  if (c === "w") { if (v !== "a") nc = null; }
+  else if (c === "f") { if (v !== "u") nc = "h"; }
+  else if (c === "ts") { if (v !== "u") nc = "t"; }
+  else if (c === "sh") { if (v === "e") nc = "s"; }
+  else if (c === "ch") { if (v === "e") nc = "t"; }
+  else if (c === "j") { if (v === "e") nc = "z"; }
+  if (nc === c) return m;
+  return { ...m, onset: nc };
+}
+// #3: 母音交替畳語 (がたごと/かさこそ) 判定。子音骨格が period 2 で繰り返すが母音が異なる。
+function detectAblaut(loops) {
+  if (loops.length < 4 || loops.length % 2 !== 0) return false;
+  const h = loops.length / 2;
+  let consonantMatch = true, vowelDiffers = false;
+  for (let i = 0; i < h; i++) {
+    if (loops[i].onset !== loops[i + h].onset) { consonantMatch = false; break; }
+    if (loops[i].nucleus !== loops[i + h].nucleus) vowelDiffers = true;
+  }
+  return consonantMatch && vowelDiffers;
+}
+// #2: CVN-CVN 畳語 (どんどん) 判定。[X, N, X, N] 構造 (X=同一CV, N=撥音)。
+function detectReduplicatedN(voiced) {
+  if (voiced.length !== 4) return false;
+  if (voiced[0].isN || !voiced[1].isN || voiced[2].isN || !voiced[3].isN) return false;
+  return voiced[0].onset === voiced[2].onset && voiced[0].nucleus === voiced[2].nucleus;
+}
+// 連続母音テンプレ (diphFinal) の相方選択。明るい形は i 終わり (かい/こい/けい)、
+// 暗め/重めは u 終わり (かう/こう)。i/u で終わる語根は相方なし (nil → 呼び手が ん へ降格)。
+function diphPartner(v, brightness) {
+  if (v === "a" || v === "o") return brightness > 0.5 ? "i" : "u";
+  if (v === "e") return "i";
+  return null;   // i, u
+}
+function chooseTemplate(rootLen, axes, inputHasN, inputHasLong, inputRedup, inputAblaut, inputRedupN, lengthHint) {
+  if (inputAblaut) return "ablautRedup";
+  if (inputRedupN) return "reduplicatedN";
+  if (rootLen >= 2 && (inputRedup || axes.tex > 0.5)) {
+    if (inputHasN) return "reduplicatedN";
+    if (inputHasLong) return "reduplicatedLong";
+    return "reduplicated";
+  }
+  if (inputHasN) return "moraicN";
+  if (inputHasLong) return "longVowel";
+  if (lengthHint !== null && lengthHint >= 4 && rootLen >= 2) {
+    if (axes.size > 0.25 && axes.sharp > 0.15) return "longVowelN";
+    if (axes.sharp > 0.2 && axes.tex < 0.3) return "geminateRi";
+    return "moraicNRi";
+  }
+  const impact = 0.5 * axes.size + 0.35 * axes.sharp - 0.3 * axes.tex;
+  if (impact > 0.45) return (rootLen >= 2 && axes.size > 0.45) ? "longVowelN" : "moraicN";
+  if (rootLen >= 2 && axes.sharp < -0.25 && axes.tex > -0.2) return "reduplicated";
+  if (axes.sharp > 0.4 && axes.tex < 0.15) return "geminate";
+  if (axes.sharp > 0.25) return "moraicN";
+  if (axes.bright > 0.3 && axes.tex < 0.25) return "diphFinal";
+  if (axes.size > 0.3) return "longVowel";
+  if (axes.sharp < -0.25) return "longVowel";
+  return rootLen >= 2 ? "ri" : "moraicN";
+}
+// 任意のモーラ列を実在オノマトペ型へ整形。決定的 (rng を使わない)。
+// lengthHint: 描線の複雑さ由来のモーラ数。大きいほど長い(4-5モーラ)テンプレートを選びやすい。
+function legalize(moras, axes, lengthHint = null) {
+  const voiced = moras;   // web 版に rest モーラは無い
+  const loops = voiced.filter(m => !m.isN);
+  if (loops.length === 0) return moras;
+
+  let rootRaw;
+  if (loops.length >= 2) {
+    const second = loops.slice(1).find(m => m.onset !== null) ?? loops[1];
+    rootRaw = [loops[0], second];
+  } else {
+    rootRaw = [loops[0]];
+  }
+  let root = rootRaw.map(stripGap).map(m => biasVoicing(m, axes.size));
+  if (root.length > 0) root[0] = biasInitialP(root[0], axes);
+  if (root.length === 2 && root[1].onset === null) {
+    root[1] = { onset: root[0].onset ?? "r", nucleus: root[1].nucleus,
+                durationMs: root[1].durationMs, gapMs: 0, amplitude: 1.0, isN: false, isQ: false };
+  }
+  const rootLen = root.length;
+
+  const inputHasN = voiced.some(m => m.isN);
+  let inputHasLong = false;
+  if (loops.length >= 2) {
+    for (let i = 1; i < loops.length; i++) {
+      if (loops[i].onset === null && loops[i].nucleus === loops[i - 1].nucleus) inputHasLong = true;
+    }
+  }
+  let inputRedup = false;
+  if (loops.length >= 2 && loops.length % 2 === 0) {
+    const h = loops.length / 2;
+    const a = loops.slice(0, h).map(m => [m.onset ?? "_", m.nucleus].join(""));
+    const b = loops.slice(h).map(m => [m.onset ?? "_", m.nucleus].join(""));
+    inputRedup = a.join(",") === b.join(",");
+  }
+  const inputAblaut = detectAblaut(loops);
+  const inputRedupN = detectReduplicatedN(voiced);
+
+  const template = chooseTemplate(rootLen, axes, inputHasN, inputHasLong, inputRedup,
+                                  inputAblaut, inputRedupN, lengthHint);
+
+  let out;
+  const last = root[root.length - 1];
+  switch (template) {
+    case "reduplicated": out = root.concat(root); break;
+    case "ri": out = root.concat([cvMora("r", "i")]); break;
+    case "moraicN": out = root.concat([moraicNMora()]); break;
+    case "longVowel": out = root.concat([heldVowelMora(last.nucleus)]); break;
+    case "geminate": out = root.concat([finalSokuonMora(last.nucleus)]); break;
+    case "bare": out = root; break;
+    case "reduplicatedN": { const unit = [root[0], moraicNMora()]; out = unit.concat(unit); break; }
+    case "reduplicatedLong": { const unit = [root[0], heldVowelMora(root[0].nucleus)]; out = unit.concat(unit); break; }
+    case "geminateRi": out = [root[0], gapMora(root[1]), cvMora("r", "i")]; break;
+    case "moraicNRi": out = [root[0], moraicNMora(), root[1], cvMora("r", "i")]; break;
+    case "longVowelN": out = root.concat([heldVowelMora(last.nucleus), moraicNMora()]); break;
+    case "ablautRedup": out = loops.slice(0, 4).map(stripGap).map(m => biasVoicing(m, axes.size)); break;
+    case "diphFinal": {
+      const partner = diphPartner(last.nucleus, axes.bright);
+      out = partner ? root.concat([heldVowelMora(partner)]) : root.concat([moraicNMora()]);
+      break;
+    }
+    default: out = root;
+  }
+  if (out.length > 5) out = out.slice(0, 5);
+  return out.map(nativize);
+}
+
+function generate(axes, rand, temperature = 0.4) {
+  const rawCount = 2.0 + (axes.tex + 1.0) * 1.5;
+  const moraCount = Math.max(1, Math.min(6, Math.round(rawCount)));
+  const isRedup = axes.tex > 0.6;
+  const geminateOn = (axes.tex > 0.6 && axes.sharp > 0.0) || axes.tex > 0.85;
+  // v0.5: 準畳語 (gata-goto / tik-tok 型)。完全畳語に届かない 4 mora 以上の語を、
+  // 子音骨格 ABAB + 奇数サイクル母音交替の構造にして「繰り返し」と認識されやすくする。
+  let quasiRedup = false;
+  if (!isRedup && moraCount >= 4) {
+    const p = Math.min(0.85, 0.55 + 0.5 * Math.max(0, axes.tex));
+    quasiRedup = rand() < p;
+  }
+  const uniqueCount = (isRedup || quasiRedup) ? Math.min(2, moraCount) : moraCount;
+
+  const unique = [];
+  let prevOnset = undefined, firstVowel = null;
+  for (let i = 0; i < uniqueCount; i++) {
+    const onset = pickConsonant(axes, prevOnset === undefined ? "" : prevOnset, temperature, rand);
+    let restrict = null;
+    if (onset && (PALATALIZED.has(onset) || SEMIVOWEL.has(onset))) restrict = new Set(["a","u","o"]);
+    // ch は cha/chi/chu/cho/che 全て収録済 (2026-06 に che 追加) → 全母音可。
+    const nucleus = pickVowel(axes, isRedup ? firstVowel : null, temperature, restrict, rand);
+    if (firstVowel === null) firstVowel = nucleus;
+    unique.push({ onset, nucleus, durationMs: 170 + axes.size * 20,
+                  gapMs: 0, amplitude: 1.0, isN: false, isQ: false });
+    prevOnset = onset;
+  }
+
+  const rawMoras = [];
+  for (let i = 0; i < moraCount; i++) {
+    const u = unique[i % uniqueCount];
+    const needsGap = geminateOn && i === uniqueCount && uniqueCount < moraCount;
+    const cycle = Math.floor(i / uniqueCount);
+    const amp = (isRedup && cycle > 0) ? Math.max(0.7, 1.0 - 0.08 * cycle) : 1.0;
+    // 準畳語: 奇数サイクルで母音を交替 (がた→ごと、tik→tok)。子音は保つ。
+    const nucleus = (quasiRedup && cycle % 2 === 1) ? ablautVowel(u.nucleus) : u.nucleus;
+    rawMoras.push({ onset: u.onset, nucleus, durationMs: u.durationMs,
+                    gapMs: needsGap ? geminateGapMs(u.onset) : 0,
+                    amplitude: amp, isN: false, isQ: false });
+  }
+
+  // v7: 実在オノマトペ型への整形 (legalize が語末ん/連続母音(かい/こう)/促音っ/長音ー/畳語末尾
+  // を音象徴 (axes) から一括で選ぶ。旧「ん を確率的に末尾付与するだけ」の簡易版を置き換え)。
+  const moras = legalize(rawMoras, axes, moraCount);
+  const finalRedup = moraPeriod(moras) < moras.length;
+
+  const f0 = Math.max(80, Math.min(400, 200 * (1 + 0.2 * axes.bright - 0.2 * axes.size)));
+  return { axes: { ...axes }, moras, baseF0: f0, isRedup: finalRedup };
+}
+// period(voiced) < count なら反復語 (CVGenerator.isReduplicated の移植)。
+function moraPeriod(moras) {
+  const n = moras.length;
+  if (n <= 1) return n;
+  const skel = m => m.isN ? "N" : (m.onset ?? "_") + m.nucleus;
+  for (let p = 1; p <= Math.floor(n / 2); p++) {
+    if (n % p !== 0) continue;
+    let ok = true;
+    for (let i = 0; i < n; i++) { if (skel(moras[i]) !== skel(moras[i % p])) { ok = false; break; } }
+    if (ok) return p;
+  }
+  return n;
+}
+function romajiOf(event) {
+  let s = "";
+  for (const m of event.moras) {
+    if (m.gapMs > 0) s += "Q";
+    if (m.isN) s += "N";
+    else s += (m.onset ?? "") + m.nucleus;
+    if (m.isQ) s += "Q";
+  }
+  return s;
+}
+
+// ─── AxisExtractor (Swift Phase 1n の移植) ───
+function extractAxes(points, w, h) {
+  if (points.length < 2 || w <= 0 || h <= 0) return { size: 0, sharp: 0, tex: 0, bright: 0 };
+  const clamp = v => Math.max(-1, Math.min(1, v));
+  let minX = points[0].x, maxX = points[0].x, minY = points[0].y, maxY = points[0].y;
+  for (const p of points) {
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+  }
+  const bboxDiag = Math.hypot(maxX - minX, maxY - minY);
+  const canvasDiag = Math.hypot(w, h);
+  const ratio = Math.max(0.05, Math.min(1.0, bboxDiag / canvasDiag));
+  const sizeNorm = (Math.log2(ratio) - Math.log2(0.05)) / (0 - Math.log2(0.05));
+  const size = clamp(sizeNorm * 2 - 1);
+
+  const k = Math.max(1, Math.min(Math.floor(points.length / 30), 8));
+  const changes = [];
+  for (let i = k; i < points.length - k; i++) {
+    const v1x = points[i].x - points[i-k].x, v1y = points[i].y - points[i-k].y;
+    const v2x = points[i+k].x - points[i].x, v2y = points[i+k].y - points[i].y;
+    const l1 = Math.hypot(v1x, v1y), l2 = Math.hypot(v2x, v2y);
+    if (l1 < 1e-6 || l2 < 1e-6) continue;
+    const cosT = Math.max(-1, Math.min(1, (v1x*v2x + v1y*v2y) / (l1*l2)));
+    changes.push(Math.acos(cosT));
+  }
+  let sharp = 0;
+  if (changes.length > 0) {
+    const sorted = [...changes].sort((a,b) => b-a);
+    const topN = Math.max(1, Math.floor(sorted.length / 10));
+    const topMean = sorted.slice(0, topN).reduce((a,b) => a+b, 0) / topN;
+    const topNorm = Math.min(1, topMean / (Math.PI * 0.5));
+    const thr = 2 * Math.PI / 3;
+    const ratio2 = changes.filter(c => c > thr).length / changes.length;
+    sharp = clamp((0.6 * topNorm + 0.4 * ratio2) * 2 - 1);
+  }
+
+  let pathLen = 0;
+  for (let i = 1; i < points.length; i++)
+    pathLen += Math.hypot(points[i].x - points[i-1].x, points[i].y - points[i-1].y);
+  // v0.4: 「ころころ」「ぐるぐる」型の同方向ループは符号反転がほぼ起きず、
+  // 折返し+蛇行だけでは反復として検知できない。signed turning angle の総和
+  // (1 周ごとに ±2π 蓄積) を第 3 の反復シグナルとして加える。
+  // ジグザグは正負相殺で総回転 ≈ 0、単一円 (bouba) は 1 周 → 閾値以下で不発。
+  let folds = 0, prevSign = 0, totalTurning = 0;
+  for (let i = 1; i < points.length - 1; i++) {
+    const v1x = points[i].x - points[i-1].x, v1y = points[i].y - points[i-1].y;
+    const v2x = points[i+1].x - points[i].x, v2y = points[i+1].y - points[i].y;
+    const cross = v1x * v2y - v1y * v2x;
+    const dot = v1x * v2x + v1y * v2y;
+    if (Math.abs(cross) > 1e-9 || Math.abs(dot) > 1e-9) totalTurning += Math.atan2(cross, dot);
+    if (Math.abs(cross) < 1e-9) continue;
+    const sign = cross > 0 ? 1 : -1;
+    if (prevSign !== 0 && sign !== prevSign) folds++;
+    prevSign = sign;
+  }
+  const wiggle = pathLen / Math.max(bboxDiag, 1);
+  // 回転数: 1.25 周まではループとみなさない (単一円・弧の保護)、4 周で max
+  const rotations = Math.abs(totalTurning) / (2 * Math.PI);
+  const rotationNorm = Math.min(1, Math.max(0, (rotations - 1.25) / 2.75));
+  const texRaw = Math.max(
+    0.5 * Math.min(1, folds / 8) + 0.5 * Math.min(1, Math.max(0, (wiggle - 1) / 4)),
+    rotationNorm);
+  const tex = clamp(texRaw * 2 - 1);
+
+  const meanY = points.reduce((a,p) => a + p.y, 0) / points.length;
+  const bright = clamp(1 - 2 * (meanY / h));
+  return { size, sharp, tex, bright };
+}
+function applyHandCorrection(ax, level) {
+  const amt = Math.max(0, Math.min(1, level));
+  return {
+    size: ax.size,
+    sharp: Math.max(-1, Math.min(1, ax.sharp + amt * 0.6)),
+    tex: ax.tex * (1 - amt * 0.3),
+    bright: ax.bright,
+  };
+}
+
+// ─── プリセット (PresetShape.swift v0.4 の 10 種) ───
+function shapeBouba()  { const p=[]; for(let i=0;i<=60;i++){const t=i*2*Math.PI/60; p.push({x:0.50+Math.cos(t)*0.30, y:0.65+Math.sin(t)*0.30});} return p; }
+function shapeKiki()   { const p=[]; const dx=(0.88-0.12)/14; for(let i=0;i<=14;i++) p.push({x:0.12+i*dx, y:0.30+(i%2===0?-0.16:0.16)}); return p; }
+function shapeMaluma() { const p=[]; for(let i=0;i<=70;i++){const t=i*2*Math.PI/70; const m=1+Math.sin(t*2)*0.06; p.push({x:0.50+Math.cos(t)*0.22*m, y:0.50+Math.sin(t)*0.17*m});} return p; }
+function shapeTakete() { const p=[]; const dx=(0.72-0.28)/8; for(let i=0;i<=8;i++) p.push({x:0.28+i*dx, y:0.28+(i%2===0?0.13:-0.13)}); return p; }
+function shapeFuwa()   { const p=[]; for(let i=0;i<=80;i++){const t=i*2*Math.PI/80; const r=0.24+Math.sin(t*3)*0.025+Math.cos(t*5)*0.012; p.push({x:0.50+Math.cos(t)*r, y:0.48+Math.sin(t)*r});} return p; }
+function shapeGotsu()  { const off=[0,-1,0.4,-0.7,1,-0.3,0.7,-1,0.5,-0.6,0.9,-0.4,0.6,-0.9,0.3,-0.5,0.8,-1,0.2]; const p=[]; for(let i=0;i<18;i++){const t=i/17; p.push({x:0.12+t*0.76, y:0.70+off[i]*0.13});} return p; }
+function shapeKira()   { const p=[]; for(let i=0;i<=50;i++){const t=i/50; p.push({x:0.20+t*0.60, y:0.30+Math.sin(t*Math.PI*7)*0.06});} return p; }
+function shapeKoro()   { const p=[]; for(const cx of [0.28,0.44,0.60,0.76]) for(let i=0;i<=24;i++){const t=i*2*Math.PI/24-Math.PI/2; p.push({x:cx+Math.cos(t)*0.055, y:0.42+Math.sin(t)*0.055});} return p; }
+function shapeGoro()   { const p=[]; for(let i=0;i<=40;i++){const t=i/40; p.push({x:0.12+t*0.76, y:0.58+Math.sin(t*Math.PI*3)*0.11});} return p; }
+function shapeChapu()  { const p=[]; for(let i=0;i<=60;i++){const t=i/60; p.push({x:0.15+t*0.70, y:0.66-Math.abs(Math.sin(t*Math.PI*5))*0.09});} return p; }
+
+const PRESETS = [
+  { label: "bouba",       axes: { size: 1,    sharp: -1,   tex: -1,   bright: -1   }, shape: shapeBouba,
+    exact: [["b","o"],[null,"u"],["b","a"]] },
+  { label: "kiki",        axes: { size: 1,    sharp: 1,    tex: 1,    bright: 1    }, shape: shapeKiki,
+    exact: [["k","i"],["k","i"]] },
+  { label: "maluma",      axes: { size: 0.5,  sharp: -0.9, tex: -0.3, bright: 0.0  }, shape: shapeMaluma,
+    exact: [["m","a"],["r","u"],["m","a"]] },
+  { label: "takete",      axes: { size: -0.2, sharp: 0.9,  tex: 0.3,  bright: 0.5  }, shape: shapeTakete,
+    exact: [["t","a"],["k","e"],["t","e"]] },
+  { label: "fuwa-fuwa",   axes: { size: 0.5,  sharp: -0.7, tex: -0.4, bright: 0.3  }, shape: shapeFuwa,
+    exact: [["f","u"],["w","a"],["f","u"],["w","a"]] },
+  { label: "gotsu-gotsu", axes: { size: 1,    sharp: 0.6,  tex: 0.9,  bright: -0.6 }, shape: shapeGotsu,
+    exact: [["g","o"],["ts","u"],["g","o"],["ts","u"]] },
+  { label: "kira-kira",   axes: { size: -0.7, sharp: 0.3,  tex: 0.9,  bright: 0.7  }, shape: shapeKira,
+    exact: [["k","i"],["r","a"],["k","i"],["r","a"]] },
+  { label: "koro-koro",   axes: { size: -0.4, sharp: -0.5, tex: 0.7,  bright: 0.3  }, shape: shapeKoro,
+    exact: [["k","o"],["r","o"],["k","o"],["r","o"]] },
+  { label: "goro-goro",   axes: { size: 0.7,  sharp: -0.4, tex: 0.7,  bright: -0.5 }, shape: shapeGoro,
+    exact: [["g","o"],["r","o"],["g","o"],["r","o"]] },
+  { label: "chapu-chapu", axes: { size: 0.0,  sharp: 0.6,  tex: 0.5,  bright: -0.4 }, shape: shapeChapu,
+    exact: [["ch","a"],["p","u"],["ch","a"],["p","u"]] },
+];
+
+// ─── Audio: サンプル bank (base サンプルのみ、音程変化なし) ───
+// 高速化 (v1.1): mp3 (48kbps mono, 約 900KB) + 並列ロード + ページロード直後に
+// fetch 開始 (fetch は user gesture 不要)。decode は AudioContext 取得後。
+const SAMPLE_EXT = ".mp3";
+let audioCtx = null;
+const sampleBank = new Map();   // key: "cv_ka" / "v_a" / "n_N" → AudioBuffer
+const rawCache = new Map();     // key → ArrayBuffer (fetch 済み・decode 前)
+let samplesLoaded = 0, samplesTotal = 0;
+
+function ensureCtx() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === "suspended") audioCtx.resume();
+  return audioCtx;
+}
+// leading silence trim (ConsonantSampleBank.trimLeadingSilence の移植):
+// 閾値 0.01、onset が 80ms 超なら音韻的閉鎖とみなし trim しない。
+// (mp3 のエンコーダ遅延 ~30ms もこれで吸収される)
+function trimLeadingSilence(buf) {
+  const ch = buf.getChannelData(0);
+  const maxScan = Math.floor(ch.length * 4 / 5);
+  let onset = -1;
+  for (let i = 0; i < maxScan; i++) {
+    if (Math.abs(ch[i]) > 0.01) { onset = i; break; }
+  }
+  const limit = Math.floor(buf.sampleRate * 0.08);   // 80ms
+  if (onset <= 0 || onset > limit) return buf;
+  const out = audioCtx.createBuffer(1, ch.length - onset, buf.sampleRate);
+  out.getChannelData(0).set(ch.subarray(onset));
+  return out;
+}
+// v7: 継続撥音 (v_<v>_nn) + CV→V diph (diph_<v1><v2>) の追加キー。
+// 継続撥音は「v_a」だけ旧録音名 v_a_N (あん型) しか無い場合があるため fallback 候補を持つ
+// (FormantSynth の「v_N フォールバック」の移植)。
+const CONTN_VOWELS = VOWELS;
+const CONTN_FALLBACK = { a: "v_a_N" };   // v_a_nn が無ければ v_a_N を同じキーで使う
+const DIPH_PAIRS = ["ai", "au", "ei", "oi", "ou"];
+
+function sampleKeys() {
+  const keys = [];
+  for (const c of CONSONANTS) {
+    let vs = VOWELS;
+    if (PALATALIZED.has(c) || SEMIVOWEL.has(c)) vs = ["a","u","o"];
+    // ch は che 収録済 → 全母音 preload (cv_che も含む)
+    for (const v of vs) keys.push("cv_" + c + v);
+  }
+  for (const v of VOWELS) keys.push("v_" + v);
+  keys.push("n_N");
+  for (const v of CONTN_VOWELS) keys.push("v_" + v + "_nn");
+  for (const p of DIPH_PAIRS) keys.push("diph_" + p);
+  return keys;
+}
+// key に対応する実ファイル名の候補列 (先頭から順に fetch を試す)。通常は [key] のみ。
+function sampleUrlCandidates(key) {
+  if (key.startsWith("v_") && key.endsWith("_nn")) {
+    const vowel = key.slice(2, -3);   // "v_a_nn" → "a"
+    const fb = CONTN_FALLBACK[vowel];
+    if (fb) return [key, fb];
+  }
+  return [key];
+}
+// Phase 1: fetch (gesture 不要なのでページロード直後に並列で始める)
+async function fetchSample(key) {
+  if (rawCache.has(key)) return;
+  for (const name of sampleUrlCandidates(key)) {
+    try {
+      const res = await fetch(SAMPLE_BASE + name + SAMPLE_EXT);
+      if (res.ok) { rawCache.set(key, await res.arrayBuffer()); break; }
+    } catch (e) { /* try next candidate */ }
+  }
+  if (!rawCache.has(key)) rawCache.set(key, null);
+  samplesLoaded++;
+  const el = document.getElementById("status");
+  if (el) el.textContent = `loading ${samplesLoaded}/${samplesTotal}`;
+  const note = document.getElementById("loading-note");
+  if (note) note.textContent = T.loading(samplesLoaded, samplesTotal);
+}
+let fetchAllPromise = null;
+function fetchAllSamples() {
+  if (!fetchAllPromise) {
+    const keys = sampleKeys();
+    samplesTotal = keys.length;
+    fetchAllPromise = Promise.all(keys.map(fetchSample));
+  }
+  return fetchAllPromise;
+}
+// 長母音サステイン用ループ点 (FormantSynth.sustainWrap の移植)。
+// ping-pong でなくネイティブ forward loop (loopStart/loopEnd) を使うため、
+// 尾の定常部の**上昇ゼロクロス**に揃えてクリックを避ける。duration<=0.12s は対象外。
+const loopPointsCache = new Map();   // key: AudioBuffer → {loopStart, loopEnd} | null
+function computeLoopPoints(buf) {
+  if (loopPointsCache.has(buf)) return loopPointsCache.get(buf);
+  const sr = buf.sampleRate, ch = buf.getChannelData(0), dur = ch.length / sr;
+  if (dur <= 0.12) { loopPointsCache.set(buf, null); return null; }
+  const edge = 0.02;
+  const win = Math.min(0.18, (dur - edge) * 0.5);
+  const snapToRisingZC = (targetSec) => {
+    const maxBack = Math.floor(0.04 * sr);
+    let idx = Math.min(ch.length - 1, Math.floor(targetSec * sr));
+    for (let k = 0; k < maxBack && idx - k > 1; k++) {
+      const i = idx - k;
+      if (ch[i - 1] < 0 && ch[i] >= 0) return i / sr;
+    }
+    return targetSec;   // 見つからなければそのまま (無音に近く実害小)
+  };
+  const loopEnd = snapToRisingZC(dur - edge);
+  const loopStart = snapToRisingZC(Math.max(0, loopEnd - win));
+  const info = (loopEnd > loopStart) ? { loopStart, loopEnd } : null;
+  loopPointsCache.set(buf, info);
+  return info;
+}
+// Phase 2: decode。AudioContext は suspended 状態でも decode 可能なので、
+// ページロード中に先行 decode する (gesture が要るのは resume = 発音のみ)。
+async function decodeSample(key) {
+  if (sampleBank.has(key)) return sampleBank.get(key);
+  const raw = rawCache.get(key);
+  if (raw === null) { sampleBank.set(key, null); return null; }   // fetch 失敗のみ確定
+  if (!raw) return null;
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const buf = await audioCtx.decodeAudioData(raw.slice(0));
+    const trimmed = trimLeadingSilence(buf);
+    computeLoopPoints(trimmed);   // 事前計算 (再生時の毎回計算を避ける)
+    sampleBank.set(key, trimmed);
+    return trimmed;
+  } catch (e) {
+    // decode 失敗は確定させない (suspended 起因なら gesture 後の preloadAll で再試行)
+    return null;
+  }
+}
+async function preloadAll() {
+  await fetchAllSamples();
+  await Promise.all(sampleKeys().map(decodeSample));
+  const ok = [...sampleBank.values()].filter(Boolean).length;
+  document.getElementById("status").textContent = `samples ready (${ok}/${samplesTotal})`;
+}
+
+function bufferFor(mora) {
+  if (mora.isN) return sampleBank.get("n_N") ?? null;
+  if (mora.onset === null) return sampleBank.get("v_" + mora.nucleus) ?? null;
+  const exact = sampleBank.get("cv_" + mora.onset + mora.nucleus);
+  if (exact) return exact;
+  return sampleBank.get("cv_" + mora.onset + "a") ?? null;   // /a/ フォールバック
+}
+function contNBufferFor(vowel) { return sampleBank.get("v_" + vowel + "_nn") ?? null; }
+function diphBufferFor(v1, v2) { return sampleBank.get("diph_" + v1 + v2) ?? null; }
+
+// ─── v7: モーラ列を走査し、通常再生ではカバーできない3パターンを検出する。
+// (FormantSynth の longVowelExtension / continuationNVowel / cvDiphPrev の移植・簡易版)
+//  - chainRoot/chainMember: 直前と同じ母音が続く V-only モーラ (ー) → root から
+//    ネイティブループで継続再生し、member 側は個別に鳴らさない (「短い母音2回」化を防ぐ)。
+//  - contN: 直前が母音で終わるモーラの後の ん → v_<v>_nn (無ければ n_N)。
+//  - diphPartner: 直前が CV (onset 有) で終わり、母音が変わる V-only モーラ (かい/こう) →
+//    diph_<v1><v2> の後半 (2 母音目への遷移部) を使う。
+function analyzeMoras(moras) {
+  const plan = moras.map(() => ({ kind: "normal" }));
+  for (let i = 0; i < moras.length; i++) {
+    const m = moras[i];
+    if (m.isN) {
+      if (i > 0 && !moras[i - 1].isN) plan[i] = { kind: "contN", prevIndex: i - 1 };
+      continue;
+    }
+    if (i > 0 && m.onset === null && !moras[i - 1].isN && moras[i - 1].nucleus === m.nucleus) {
+      let root = i - 1;
+      while (root > 0 && moras[root].onset === null && !moras[root].isN &&
+             moras[root].nucleus === moras[root - 1].nucleus) root--;
+      plan[i] = { kind: "chainMember", rootIndex: root };
+      if (plan[root].kind === "normal") plan[root] = { kind: "chainRoot", memberEnd: i };
+      else if (plan[root].kind === "chainRoot") plan[root].memberEnd = i;
+      continue;
+    }
+    if (i > 0 && m.onset === null && moras[i - 1].onset !== null && !moras[i - 1].isN &&
+        moras[i - 1].nucleus !== m.nucleus && diphBufferFor(moras[i - 1].nucleus, m.nucleus)) {
+      plan[i] = { kind: "diphPartner", v1: moras[i - 1].nucleus, v2: m.nucleus };
+    }
+  }
+  return plan;
+}
+
+// ─── 再生: BPM グリッド (1 mora = 30000/BPM ms, 発話テンポ統一) ───
+let activeNodes = [];
+function stopAll() {
+  for (const n of activeNodes) { try { n.stop(); } catch (e) {} }
+  activeNodes = [];
+}
+// suspended 中に再生要求された event。resume が完了した時点で最新の 1 件だけ鳴らす。
+let pendingEvent = null;
+function playEvent(event) {
+  const ctx = ensureCtx();
+  // suspended のままスケジュールすると、resume 完了時にはエンベロープが
+  // 「過去」になっていて無音になることがある (初回描画で音が出ないバグの原因)。
+  // resume を試みつつ、statechange で running になった瞬間に pending を鳴らす。
+  // (Safari では resume() の promise が user activation を得るまで pending のままに
+  //  なるため、promise 連鎖ではなく statechange を確実な再生トリガにする。)
+  if (ctx.state !== "running") {
+    pendingEvent = event;
+    ctx.resume().catch(() => {});
+    ctx.addEventListener("statechange", function onState() {
+      if (ctx.state !== "running") return;
+      ctx.removeEventListener("statechange", onState);
+      if (pendingEvent) {
+        const ev = pendingEvent;
+        pendingEvent = null;
+        scheduleEvent(ctx, ev);
+      }
+    });
+    return;
+  }
+  pendingEvent = null;
+  scheduleEvent(ctx, event);
+}
+// buf を [start, start+dur] (ctx 時刻) に 3ms/12ms フェード付きでスケジュール。
+// bufferOffsetSec: buf 内の再生開始位置 (diph の遷移部だけ使う場合など)。
+// loop: {loopStart, loopEnd} を渡すとネイティブループ (長母音サステイン)。
+function scheduleOne(ctx, buf, start, dur, amplitude, bufferOffsetSec = 0, loop = null) {
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  if (loop) { src.loop = true; src.loopStart = loop.loopStart; src.loopEnd = loop.loopEnd; }
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0, start);
+  g.gain.linearRampToValueAtTime(amplitude, start + 0.003);
+  g.gain.setValueAtTime(amplitude, start + Math.max(0.003, dur - 0.012));
+  g.gain.linearRampToValueAtTime(0, start + dur);
+  src.connect(g).connect(ctx.destination);
+  src.start(start, bufferOffsetSec);
+  src.stop(start + dur + 0.02);
+  activeNodes.push(src);
+}
+function scheduleEvent(ctx, event) {
+  stopAll();
+  const bpm = Number(document.getElementById("kn-bpm").value);
+  const moraSec = 30.0 / bpm;             // 30000/BPM ms
+  const moras = event.moras;
+  const plan = analyzeMoras(moras);
+  const preRollSec = Math.min(0.1, moraSec * 0.5);   // FormantSynth.contNPreRollMs の移植
+  let t = ctx.currentTime + 0.04;
+  for (let i = 0; i < moras.length; i++) {
+    const m = moras[i], p = plan[i];
+    t += m.gapMs / 1000;                  // 促音 = 無音 gap
+
+    if (p.kind === "chainMember") {
+      // root 側の延長再生でカバー済み → このモーラでは何も鳴らさない。
+    } else if (p.kind === "chainRoot") {
+      // 長母音サステイン: root モーラのサンプルをネイティブループで
+      // 直後の同母音チェーン全体 (root..memberEnd) の長さぶん継続再生する。
+      const span = (p.memberEnd - i + 1) * moraSec;
+      const buf = bufferFor(m);
+      if (buf) scheduleOne(ctx, buf, t, span, m.amplitude, 0, computeLoopPoints(buf));
+    } else if (p.kind === "contN") {
+      // 継続撥音: 直前母音から続けて v_<v>_nn を preRoll ぶん早めに立ち上げる
+      // (前モーラの自然な減衰と時間的に重なる = 先行オーバーラップ)。無ければ通常の ん。
+      const buf = contNBufferFor(moras[p.prevIndex].nucleus);
+      if (buf) scheduleOne(ctx, buf, t - preRollSec, moraSec + preRollSec, m.amplitude);
+      else { const nb = bufferFor(m); if (nb) scheduleOne(ctx, nb, t, moraSec, m.amplitude); }
+    } else if (p.kind === "diphPartner") {
+      // CV→V 連続母音 (かい/こう): diph_<v1><v2> の「2 母音目への遷移部」だけを使う
+      // (先頭の v1 部分は直前 CV モーラが既に鳴らしているため、頭からは再生しない)。
+      const buf = diphBufferFor(p.v1, p.v2);
+      const offset = buf ? Math.min(0.12, buf.duration * 0.4) : 0;
+      if (buf) scheduleOne(ctx, buf, t, moraSec, m.amplitude, offset);
+    } else {
+      const buf = bufferFor(m);
+      if (buf) scheduleOne(ctx, buf, t, moraSec, m.amplitude);
+    }
+    t += moraSec;
+  }
+}
+
+// ─── UI 状態 ───
+let lastAxes = { size: 0, sharp: 0, tex: 0, bright: 0 };
+// 直近に鳴った event (PLAY での正確なリピート用)。
+// スライダーは 0.01 刻みに量子化されるため、描画軸 (フル精度) から再生成すると
+// seed がズレて別の語になってしまう。PLAY は「最後の発声そのもの」を繰り返し、
+// スライダーを動かしたときだけ新規生成する。
+let lastEvent = null;
+let lastEventAxes = null;   // lastEvent を作ったときの軸 (変更検知用)
+let presetFirstTapDone = new Set();
+let presetTapCounts = new Map();
+const logEntries = [];   // { axes, romaji, f0, moras, isRedup }
+
+function axesEqual(a, b) {
+  if (!a || !b) return false;
+  return Math.abs(a.size - b.size) < 1e-9 && Math.abs(a.sharp - b.sharp) < 1e-9 &&
+         Math.abs(a.tex - b.tex) < 1e-9 && Math.abs(a.bright - b.bright) < 1e-9;
+}
+// ─── フィードバック収集 (👍👎) ───
+// 各発声を「発話レコード」として保持し、投票されたものだけ feedbackLog に蓄積。
+// localStorage に永続化し、COPY で JSON 書き出し → bias 表のデータ駆動調整に使う。
+// FEEDBACK_ENDPOINT に URL を設定すると、投票を 1 件ずつ POST 送信もする
+// (Google Apps Script 等で公開ユーザーから収集したい場合用。空なら何もしない)。
+const FEEDBACK_ENDPOINT = "";
+const FB_VERSION = 2;          // データ形式のバージョン (集計側の互換性確認用)
+let feedbackLog = [];
+try { feedbackLog = JSON.parse(localStorage.getItem("onomatoi.feedback") || "[]"); } catch (e) {}
+let utteranceSeq = 0;
+let currentUtterance = null;   // 投票対象 (直近の発声)
+
+function saveFeedback() {
+  if (feedbackLog.length > 500) feedbackLog = feedbackLog.slice(-500);
+  try { localStorage.setItem("onomatoi.feedback", JSON.stringify(feedbackLog)); } catch (e) {}
+  document.getElementById("fb-count").textContent = feedbackLog.length;
+}
+function setVoteButtons(enabled, sel) {
+  for (const [id, v] of [["btn-good", 1], ["btn-bad", -1]]) {
+    const b = document.getElementById(id);
+    b.disabled = !enabled;
+    b.classList.toggle("sel", sel === v);
+  }
+}
+function vote(verdict) {
+  if (!currentUtterance) return;
+  const u = currentUtterance;
+  // 同じ発話への再投票は上書き (👍→👎 の修正を許す)
+  const idx = feedbackLog.findIndex(r => r.id === u.id);
+  const rec = {
+    v: FB_VERSION, id: u.id, t: new Date().toISOString(), lang: uiLang,
+    src: u.src, word: u.word, mora: u.mora, redup: u.redup,
+    axes: u.axes, vote: verdict,
+  };
+  if (idx >= 0) feedbackLog[idx] = rec; else feedbackLog.push(rec);
+  saveFeedback();
+  setVoteButtons(true, verdict);
+  // 記録確認: ボタン横に「✓ 記録しました（計N件）」を一瞬表示
+  const vm = document.getElementById("vote-msg");
+  if (vm) {
+    vm.textContent = T.fbSaved(feedbackLog.length);
+    vm.classList.add("show");
+    clearTimeout(window._voteMsgTimer);
+    window._voteMsgTimer = setTimeout(() => vm.classList.remove("show"), 1800);
+  }
+  if (FEEDBACK_ENDPOINT) {
+    try {
+      fetch(FEEDBACK_ENDPOINT, { method: "POST", keepalive: true,
+        headers: { "Content-Type": "text/plain" }, body: JSON.stringify(rec) });
+    } catch (e) {}
+  }
+}
+
+// event を「最後の発声」として記憶しつつ表示・再生する。
+// src は発声の出どころ (draw/tune/preset/romaji/log) — フィードバック集計の文脈情報。
+function playAndRemember(event, axesUsed, log, src = "tune") {
+  lastEvent = event;
+  lastEventAxes = { ...axesUsed };
+  // 投票対象を更新 (再生のたびに新しい発話 ID。PLAY リピートでは更新しない)
+  utteranceSeq += 1;
+  currentUtterance = {
+    id: Date.now().toString(36) + "-" + utteranceSeq,
+    src,
+    word: romajiOf(event),
+    mora: event.moras.filter(m => !m.isSilentRest).length,
+    redup: !!event.isRedup,
+    axes: {
+      s: Math.round(axesUsed.size * 1000) / 1000,
+      sh: Math.round(axesUsed.sharp * 1000) / 1000,
+      t: Math.round(axesUsed.tex * 1000) / 1000,
+      b: Math.round(axesUsed.bright * 1000) / 1000,
+    },
+  };
+  setVoteButtons(true, null);
+  showResult(event);
+  playEvent(event);
+  if (log) appendLog(event);
+}
+
+function setSliders(ax) {
+  lastAxes = { ...ax };
+  const pairs = [["size","size"],["sharp","sharp"],["tex","tex"],["bright","bright"]];
+  for (const [id, key] of pairs) {
+    document.getElementById("ax-" + id).value = ax[key];
+    document.getElementById("val-" + id).textContent = (ax[key] >= 0 ? "+" : "") + ax[key].toFixed(2);
+  }
+}
+function readSliders() {
+  return {
+    size: Number(document.getElementById("ax-size").value),
+    sharp: Number(document.getElementById("ax-sharp").value),
+    tex: Number(document.getElementById("ax-tex").value),
+    bright: Number(document.getElementById("ax-bright").value),
+  };
+}
+function showResult(event) {
+  document.getElementById("result-word").textContent = romajiOf(event);
+  const n = event.moras.length;
+  document.getElementById("result-meta").innerHTML =
+    `${n} mora${event.isRedup ? " · redup" : ""}`;   // F0 は Web 版では音に反映されないため非表示
+}
+function appendLog(event) {
+  logEntries.push({ axes: { ...event.axes }, romaji: romajiOf(event),
+                    f0: event.baseF0, moras: event.moras.map(m => ({ ...m })),
+                    isRedup: event.isRedup });
+  if (logEntries.length > 100) logEntries.shift();
+  renderLog();
+}
+function renderLog() {
+  const el = document.getElementById("log");
+  document.getElementById("log-count").textContent = logEntries.length;
+  el.innerHTML = "";
+  for (let i = logEntries.length - 1; i >= 0; i--) {
+    const e = logEntries[i];
+    const row = document.createElement("div");
+    row.className = "log-row";
+    const fmt = v => (v >= 0 ? "+" : "") + v.toFixed(1);
+    row.innerHTML =
+      `<span class="axes">${fmt(e.axes.size)} ${fmt(e.axes.sharp)} ${fmt(e.axes.tex)} ${fmt(e.axes.bright)} →</span>` +
+      `<span class="word">${e.romaji}</span>` +
+      `<span class="meta">m:${e.moras.length}${e.isRedup ? "R" : ""}</span>`;
+    // タップで「そのシニフィアンそのもの」を再生 (保存 mora 列、iPad 版 v0.4 と同じ)
+    row.addEventListener("click", () => {
+      setSliders(e.axes);
+      const ev = { axes: e.axes, moras: e.moras, baseF0: e.f0, isRedup: e.isRedup };
+      playAndRemember(ev, e.axes, false, "log");   // PLAY で同じ語をリピート可能に
+    });
+    el.appendChild(row);
+  }
+}
+
+// 生成 + 再生 + ログ (決定的 seed)
+function generateAndPlay(axes, salt = 0, log = true, src = "tune") {
+  const rand = mulberry32(axesSeed(axes, salt));
+  const event = generate(axes, rand);
+  playAndRemember(event, axes, log, src);
+  return event;
+}
+
+// ─── Canvas (sketch) ───
+const canvas = document.getElementById("canvas");
+const cctx = canvas.getContext("2d");
+let drawing = false, stroke = [], presetShapePts = null;
+
+function resizeCanvas() {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  cctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  redraw();
+}
+function redraw() {
+  const rect = canvas.getBoundingClientRect();
+  cctx.clearRect(0, 0, rect.width, rect.height);
+  // プリセット見本の形 (薄ピンク)
+  if (presetShapePts && presetShapePts.length > 1) {
+    cctx.beginPath();
+    cctx.strokeStyle = "rgba(232,72,138,0.30)";
+    cctx.lineWidth = 2;
+    presetShapePts.forEach((p, i) => {
+      const x = p.x * rect.width, y = p.y * rect.height;
+      i === 0 ? cctx.moveTo(x, y) : cctx.lineTo(x, y);
+    });
+    cctx.stroke();
+  }
+  if (stroke.length > 1) {
+    cctx.beginPath();
+    cctx.strokeStyle = "#555";
+    cctx.lineWidth = 2.5;
+    cctx.lineCap = "round";
+    cctx.lineJoin = "round";
+    stroke.forEach((p, i) => i === 0 ? cctx.moveTo(p.x, p.y) : cctx.lineTo(p.x, p.y));
+    cctx.stroke();
+  }
+}
+function pointerPos(ev) {
+  const rect = canvas.getBoundingClientRect();
+  return { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
+}
+canvas.addEventListener("pointerdown", ev => {
+  ensureCtx();
+  drawing = true;
+  presetShapePts = null;
+  stroke = [pointerPos(ev)];
+  canvas.setPointerCapture(ev.pointerId);
+  ev.preventDefault();
+});
+canvas.addEventListener("pointermove", ev => {
+  if (!drawing) return;
+  stroke.push(pointerPos(ev));
+  redraw();
+  ev.preventDefault();
+});
+canvas.addEventListener("pointerup", ev => {
+  if (!drawing) return;
+  drawing = false;
+  if (stroke.length >= 2) {
+    const rect = canvas.getBoundingClientRect();
+    const raw = extractAxes(stroke, rect.width, rect.height);
+    const hc = Number(document.getElementById("kn-hc").value);
+    const ax = applyHandCorrection(raw, hc);
+    setSliders(ax);
+    generateAndPlay(ax, 0, true, "draw");   // 同じ描写 = 同じ語 (決定的)
+  }
+  ev.preventDefault();
+});
+
+// ─── TUNE / プリセット / ROMAJI / その他 UI 配線 ───
+document.getElementById("btn-play").addEventListener("click", () => {
+  ensureCtx();
+  // 軸が変わっていなければ「最後の発声そのもの」をリピート (描画直後の語を何度でも)。
+  // スライダーを動かした (= 軸が変わった) ときだけ新規生成する。
+  if (lastEvent && axesEqual(lastAxes, lastEventAxes)) {
+    showResult(lastEvent);
+    playEvent(lastEvent);
+    return;
+  }
+  generateAndPlay(readSliders());
+});
+["size","sharp","tex","bright"].forEach(id => {
+  document.getElementById("ax-" + id).addEventListener("input", () => {
+    const ax = readSliders();
+    lastAxes = ax;
+    document.getElementById("val-" + id).textContent =
+      (ax[id === "tex" ? "tex" : id] >= 0 ? "+" : "") + ax[id === "tex" ? "tex" : id].toFixed(2);
+  });
+});
+document.getElementById("kn-bpm").addEventListener("input", e => {
+  document.getElementById("val-bpm").textContent = e.target.value;
+});
+document.getElementById("kn-hc").addEventListener("input", e => {
+  document.getElementById("val-hc").textContent = Number(e.target.value).toFixed(2);
+});
+
+// プリセット chips
+const chipsEl = document.getElementById("preset-chips");
+for (const preset of PRESETS) {
+  const b = document.createElement("button");
+  b.textContent = preset.label;
+  b.addEventListener("click", () => {
+    ensureCtx();
+    setSliders(preset.axes);
+    stroke = [];
+    presetShapePts = preset.shape();
+    redraw();
+    const count = (presetTapCounts.get(preset.label) ?? 0) + 1;
+    presetTapCounts.set(preset.label, count);
+    if (!presetFirstTapDone.has(preset.label)) {
+      // 初回タップ: 正確な発音
+      presetFirstTapDone.add(preset.label);
+      const moras = preset.exact.map(([c, v]) => ({
+        onset: c, nucleus: v, durationMs: 180, gapMs: 0, amplitude: 1.0, isN: false
+      }));
+      const f0 = Math.max(80, Math.min(400, 200 * (1 + 0.2 * preset.axes.bright - 0.2 * preset.axes.size)));
+      const ev = { axes: preset.axes, moras, baseF0: f0, isRedup: false };
+      playAndRemember(ev, preset.axes, true, "preset");   // PLAY で正確発音をリピート可能に
+    } else {
+      // 2 回目以降: タップ回数 salt の変奏
+      generateAndPlay(preset.axes, count, true, "preset");
+    }
+  });
+  chipsEl.appendChild(b);
+}
+
+// ROMAJI 直接入力 (parseMora の移植)
+function parseMora(token, withQ) {
+  if (!token) return null;
+  const gapFor = c => withQ ? geminateGapMs(c) : 0;
+  if (VOWELS.includes(token))
+    return { onset: null, nucleus: token, durationMs: 180, gapMs: gapFor(null), amplitude: 1, isN: false };
+  for (const c2 of ["sh","ts","ch","ky","gy","ny"]) {
+    if (token.startsWith(c2) && VOWELS.includes(token.slice(c2.length)))
+      return { onset: c2, nucleus: token.slice(c2.length), durationMs: 180, gapMs: gapFor(c2), amplitude: 1, isN: false };
+  }
+  if (token.length === 2 && CONSONANTS.includes(token[0]) && VOWELS.includes(token[1]))
+    return { onset: token[0], nucleus: token[1], durationMs: 180, gapMs: gapFor(token[0]), amplitude: 1, isN: false };
+  return null;
+}
+function playRomaji() {
+  ensureCtx();
+  const tokens = document.getElementById("romaji-input").value
+    .trim().toLowerCase().split(/[\s\-_]+/).filter(Boolean);
+  const moras = [];
+  let pendingQ = false;
+  for (const tk of tokens) {
+    if (tk === "q") { pendingQ = true; continue; }
+    if (tk === "n" || tk === "nn") {
+      moras.push({ onset: null, nucleus: "a", durationMs: 160,
+                   gapMs: pendingQ ? 70 : 0, amplitude: 1, isN: true });
+      pendingQ = false; continue;
+    }
+    const m = parseMora(tk, pendingQ);
+    if (m) moras.push(m);
+    pendingQ = false;
+  }
+  if (moras.length === 0) return;
+  const ev = { axes: lastAxes, moras, baseF0: 200, isRedup: false };
+  playAndRemember(ev, lastAxes, false, "romaji");   // PLAY で同じ入力をリピート可能に
+}
+document.getElementById("btn-romaji").addEventListener("click", playRomaji);
+document.getElementById("romaji-input").addEventListener("keydown", e => {
+  if (e.key === "Enter") playRomaji();
+});
+const romajiQuick = ["bo u ba", "ki ki", "a i u e o", "ka Q ka", "do N",
+                     "kya kyo", "cha pu cha pu", "shi N"];
+const rchips = document.getElementById("romaji-chips");
+for (const q of romajiQuick) {
+  const b = document.createElement("button");
+  b.textContent = q;
+  b.addEventListener("click", () => {
+    document.getElementById("romaji-input").value = q;
+    playRomaji();
+  });
+  rchips.appendChild(b);
+}
+
+// CLEAR (sketch + sliders リセット、log は保持 — iPad 版と同じ)
+document.getElementById("btn-clear").addEventListener("click", () => {
+  stopAll();
+  stroke = [];
+  presetShapePts = null;
+  redraw();
+  setSliders({ size: 0, sharp: 0, tex: 0, bright: 0 });
+  lastEvent = null;
+  lastEventAxes = null;
+  document.getElementById("result-word").textContent = "—";
+  document.getElementById("result-meta").textContent = "";
+  presetFirstTapDone.clear();
+  presetTapCounts.clear();
+});
+document.getElementById("btn-log-clear").addEventListener("click", () => {
+  logEntries.length = 0;
+  renderLog();
+});
+
+// ─── フィードバック UI 配線 ───
+document.getElementById("btn-good").addEventListener("click", () => vote(1));
+document.getElementById("btn-bad").addEventListener("click", () => vote(-1));
+document.getElementById("btn-fb-copy").addEventListener("click", async () => {
+  const payload = JSON.stringify({
+    app: "onomatoi-web", fbVersion: FB_VERSION,
+    exported: new Date().toISOString(),
+    records: feedbackLog,
+  }, null, 1);
+  const btn = document.getElementById("btn-fb-copy");
+  try {
+    await navigator.clipboard.writeText(payload);
+    btn.textContent = T.fbCopied;
+  } catch (e) {
+    // clipboard が使えない環境: テキストを selection で出す代替
+    window.prompt("Copy:", payload);
+  }
+  setTimeout(() => { btn.textContent = "COPY"; }, 1500);
+});
+document.getElementById("btn-fb-clear").addEventListener("click", () => {
+  feedbackLog = [];
+  saveFeedback();
+  setVoteButtons(!!currentUtterance, null);
+});
+
+// ─── 起動 ───
+window.addEventListener("resize", resizeCanvas);
+resizeCanvas();
+applyLangTexts();
+document.getElementById("fb-count").textContent = feedbackLog.length;
+// fetch + decode はどちらも user gesture 不要 (AudioContext は suspended のまま
+// decode できる) → ページロード直後から全部済ませる。gesture が要るのは resume のみ。
+// バナーは「本当に鳴らせる状態」になるまで loading を表示し、さらに最低表示時間を
+// 保証する (早すぎる「準備完了」で戸惑わないように)。
+// 読込 (fetch+decode) はページロード直後に。完了したら「▶ タップして開始」ボタンを出す。
+// その明示タップで AudioContext を resume (確実な user gesture) → 以降は描いた瞬間に鳴る。
+(async () => {
+  await fetchAllSamples();
+  try { await Promise.all(sampleKeys().map(decodeSample)); } catch (e) {}
+  const ok = [...sampleBank.values()].filter(Boolean).length;
+  document.getElementById("status").textContent = `samples ready (${ok}/${samplesTotal})`;
+  showStartButton();
+})();
+
+function showStartButton() {
+  const note = document.getElementById("loading-note");
+  if (!note) return;
+  note.textContent = T.start;
+  // インライン style が CSS class より優先されるので、目立つボタン見た目を inline で設定
+  Object.assign(note.style, { background: "var(--pink)", color: "#fff", cursor: "pointer",
+    textAlign: "center", fontWeight: "800", fontSize: "15px", padding: "13px 10px" });
+  note.onclick = startApp;
+}
+function startApp() {
+  const note = document.getElementById("loading-note");
+  const ctx = ensureCtx();              // user gesture 内で生成/取得
+  try {                                 // WebKit 古典アンロック (無音1サンプル即再生)
+    const b = ctx.createBuffer(1, 1, 22050);
+    const s = ctx.createBufferSource(); s.buffer = b; s.connect(ctx.destination); s.start(0);
+  } catch (e) {}
+  const finish = () => {
+    if (!note) return;
+    note.onclick = null;
+    // 開始後は声のクレジット表示 (元の控えめな見た目に戻す)
+    Object.assign(note.style, { background: "rgba(77, 191, 242, 0.13)", color: "#1899c2",
+      cursor: "default", textAlign: "left", fontWeight: "normal", fontSize: "11px", padding: "6px 10px" });
+    note.textContent = T.voice;
+  };
+  ctx.resume().then(finish).catch(finish);
+}
+// AudioContext のアンロック: iOS/macOS Safari は一部イベントしか user activation と
+// 認めないため、複数イベントで試みる (running になったら全て解除)。
+// resume() に加え、ジェスチャーハンドラ内での無音バッファ即時再生 (WebKit の古典的
+// アンロック手法) も行う — resume 単独では解除されない環境への保険。
+const UNLOCK_EVENTS = ["pointerdown", "pointerup", "touchstart", "touchend", "mousedown", "click", "keydown"];
+function unlockAudio() {
+  const ctx = ensureCtx();   // gesture 内で resume
+  try {
+    // 1 サンプルの無音を即時再生 → WebKit がこのコンテキストを「許可済み」にする
+    const b = ctx.createBuffer(1, 1, 22050);
+    const s = ctx.createBufferSource();
+    s.buffer = b;
+    s.connect(ctx.destination);
+    s.start(0);
+  } catch (e) {}
+  preloadAll();              // 万一 decode 失敗が残っていれば再試行
+  if (ctx.state === "running") {
+    for (const ev of UNLOCK_EVENTS) document.removeEventListener(ev, unlockAudio);
+  }
+}
+for (const ev of UNLOCK_EVENTS) document.addEventListener(ev, unlockAudio);
+</script>
+</body>
+</html>

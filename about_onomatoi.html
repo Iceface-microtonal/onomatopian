@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>About — Iceface Onomatoi</title>
+<style>
+  :root {
+    --pink: #e8488a;
+    --pink-bg: rgba(232, 72, 138, 0.10);
+    --aqua: #1899c2;
+    --aqua-bg: rgba(77, 191, 242, 0.13);
+    --gray: #888;
+    --border: rgba(0,0,0,0.10);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    background: #fff; color: #222;
+    padding: 16px; max-width: 760px; margin: 0 auto;
+    line-height: 1.85; font-size: 13px;
+  }
+  header { display: flex; align-items: baseline; gap: 8px; padding: 6px 2px 14px; flex-wrap: wrap; }
+  header .brand { font-size: 12px; font-weight: 800; color: var(--gray); }
+  header .pts { font-size: 15px; font-weight: 800; color: var(--pink); }
+  header .nav { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+  a.button {
+    font-size: 11px; font-weight: 700; text-decoration: none;
+    border-radius: 5px; padding: 6px 12px;
+    background: var(--pink); color: #fff;
+  }
+  .lang-toggle button {
+    font-family: inherit; font-size: 10px; font-weight: 700;
+    border: none; border-radius: 4px; padding: 5px 10px; cursor: pointer;
+    background: var(--pink-bg); color: var(--pink);
+  }
+  .lang-toggle button.active { background: var(--pink); color: #fff; }
+  h1 { font-size: 20px; margin: 18px 0 4px; color: #111; }
+  h2 { font-size: 14px; margin: 26px 0 8px; color: var(--pink); }
+  p { margin: 8px 0; }
+  .lead { color: #444; }
+  .voice { color: var(--aqua); background: var(--aqua-bg); border-radius: 6px;
+           padding: 6px 10px; display: inline-block; margin-top: 4px; font-size: 12px; }
+  table { border-collapse: collapse; margin: 10px 0; width: 100%; font-size: 12px; }
+  th, td { border: 1px solid var(--border); padding: 6px 8px; text-align: left; }
+  th { background: var(--pink-bg); color: var(--pink); font-size: 11px; }
+  code { background: rgba(0,0,0,0.05); border-radius: 3px; padding: 1px 5px; font-size: 12px; }
+  .word { font-weight: 700; color: var(--pink); }
+  footer { margin: 34px 0 14px; font-size: 11px; color: var(--gray);
+           border-top: 1px solid var(--border); padding-top: 12px; }
+  footer a { color: var(--aqua); }
+  ul { padding-left: 20px; }
+  li { margin: 4px 0; }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="brand">ICEFACE</span><span class="pts">Onomatoi</span>
+  <span class="nav">
+    <span class="lang-toggle">
+      <button id="btn-ja">日本語</button>
+      <button id="btn-en">English</button>
+    </span>
+    <a class="button" href="./iceface_onomatoi.html">▶ アプリを開く / Open App</a>
+  </span>
+</header>
+
+<!-- ━━━━━━━━━━━━ 日本語 ━━━━━━━━━━━━ -->
+<div id="lang-ja">
+  <h1>かたちが、しゃべる。</h1>
+  <p class="lead">
+    <strong>Iceface Onomatoi</strong> は、描いた「かたち」から
+    まだ意味を持たない言葉 —— シニフィアン —— を生み出して発声する楽器です。
+    丸くて大きな絵はぼってりと低く、尖って細かい絵はちくちくと鋭く喋ります。
+  </p>
+  <p class="voice">Voice(声): PuppeTwin</p>
+
+  <h2>音象徴 (サウンド・シンボリズム) について</h2>
+  <p>
+    「ブーバ/キキ効果」をご存じでしょうか。丸い図形と尖った図形を見せて
+    「どちらが <span class="word">bouba</span> でどちらが <span class="word">kiki</span> か」と聞くと、
+    言語圏を問わずほとんどの人が丸い方を bouba と答えます (Ramachandran &amp; Hubbard 2001、
+    原型は Köhler 1929 の <span class="word">maluma / takete</span>)。
+    音と形の間には、恣意的でない対応 —— 音象徴 —— が存在するのです。
+    日本語はオノマトペ (ふわふわ、ごつごつ、きらきら…) が極めて豊かな言語で、
+    この対応を日常的に使いこなしています。Onomatoi はこの現象を逆向きに使い、
+    「かたち」から「それらしく聞こえる語」を合成します。
+  </p>
+
+  <h2>しくみ — 4 つの軸</h2>
+  <p>描いた 1 ストロークから 4 つの軸を抽出します:</p>
+  <table>
+    <tr><th>軸</th><th>かたちのどこを見るか</th><th>音への効き方</th></tr>
+    <tr><td><code>size</code> 大小</td><td>絵の大きさ (対角線比)</td><td>大きい → a/o など重い母音、g/b など有声子音</td></tr>
+    <tr><td><code>sharp</code> 鋭さ</td><td>線の折れの鋭さ</td><td>鋭い → k/t/ch など破裂・破擦音。鈍い → m/w や母音単独</td></tr>
+    <tr><td><code>texture</code> 質感</td><td>折返し・蛇行の量</td><td>粗い → モーラ数が増え、反復 (きらきら型) や促音 ッ が発火</td></tr>
+    <tr><td><code>bright</code> 明暗</td><td>画面の上下位置</td><td>上 (明) → i/e の明るい母音。下 (暗) → o/u</td></tr>
+  </table>
+  <p>
+    この 4 軸ベクトルが、各子音・母音に与えられた音象徴バイアス表と照合され、
+    日本語的なモーラ列 (子音+母音、母音単独、促音 <code>Q</code>、撥音 <code>N</code>) が
+    確率的に選ばれます。<strong>同じ描写からは必ず同じ語</strong>が生まれます (決定的生成) ——
+    あなたの描いたかたちに、その語が「名付け」られるのです。
+  </p>
+
+  <h2>つかいかた</h2>
+  <ul>
+    <li><strong>描く</strong> — キャンバスに 1 ストローク描くと即発声。✕ 消しゴムでリセット</li>
+    <li><strong>PLAY</strong> — 最後の発声をそのまま何度でもリピート</li>
+    <li><strong>TUNE スライダー</strong> — 4 軸を直接動かして実験</li>
+    <li><strong>プリセット</strong> — bouba/kiki/maluma/takete (音象徴研究の古典) +
+        日本語オノマトペ 6 種。初回タップは正確な発音、2 回目以降は変奏</li>
+    <li><strong>ROMAJI 直接入力</strong> — 好きなモーラ列を発声 (例: <code>cha pu cha pu</code>)</li>
+    <li><strong>LOG</strong> — 過去の語をタップでそのまま再生</li>
+  </ul>
+
+  <h2>この Web 版について</h2>
+  <p>
+    Onomatoi は iPad/Mac アプリ <em>Onomatoi (旧 Iceface PTS, Phonosymbolic Topology Synthesizer)</em>
+    の簡易 Web 版です。本体にはピッチ変化・旋律 (わらべうた) モード・
+    複数ストロークの作曲モードなどがあります。
+    声は Edge TTS 由来の収録サンプル <strong>PuppeTwin</strong> (107 ファイル) を使用しています。
+  </p>
+  <p>
+    2026-07-08: 本体コアの v7 更新 (実在オノマトペ型への整形/長母音サステイン/継続撥音/
+    連続母音かい・こう) をこの Web 版にも移植しました。
+    2026-06-22 までの旧バージョンは <a href="./iceface_onomatopian.html">こちら</a> に保存してあります。
+  </p>
+</div>
+
+<!-- ━━━━━━━━━━━━ English ━━━━━━━━━━━━ -->
+<div id="lang-en" style="display:none;">
+  <h1>Shapes that speak.</h1>
+  <p class="lead">
+    <strong>Iceface Onomatoi</strong> is an instrument that turns the shapes you draw
+    into spoken words that mean nothing yet — pure signifiers.
+    A big round blob speaks low and soft; a small spiky scribble chatters bright and sharp.
+  </p>
+  <p class="voice">Voice: PuppeTwin</p>
+
+  <h2>About sound symbolism</h2>
+  <p>
+    You may know the <em>bouba/kiki effect</em>: shown a round shape and a spiky one and asked
+    which is <span class="word">bouba</span> and which is <span class="word">kiki</span>,
+    people across languages overwhelmingly call the round one bouba
+    (Ramachandran &amp; Hubbard 2001; the original pair was Köhler's
+    <span class="word">maluma / takete</span>, 1929). Sound and shape are not arbitrarily
+    related — this is sound symbolism. Japanese is exceptionally rich in such words
+    (onomatopoeia / ideophones: <em>fuwa-fuwa</em> fluffy, <em>gotsu-gotsu</em> rugged,
+    <em>kira-kira</em> sparkling…). Onomatoi runs the phenomenon in reverse:
+    it synthesizes a word that <em>sounds like</em> your shape.
+  </p>
+
+  <h2>How it works — four axes</h2>
+  <p>From a single stroke, four axes are extracted:</p>
+  <table>
+    <tr><th>Axis</th><th>What it reads from the shape</th><th>Effect on sound</th></tr>
+    <tr><td><code>size</code></td><td>bounding-box scale</td><td>big → heavy vowels a/o, voiced consonants g/b</td></tr>
+    <tr><td><code>sharp</code></td><td>sharpness of corners</td><td>spiky → plosives/affricates k/t/ch; blunt → m/w or bare vowels</td></tr>
+    <tr><td><code>texture</code></td><td>folds and wiggliness</td><td>rough → more morae, reduplication (kira-kira type), geminate <code>Q</code></td></tr>
+    <tr><td><code>bright</code></td><td>vertical position on canvas</td><td>high (bright) → vowels i/e; low (dark) → o/u</td></tr>
+  </table>
+  <p>
+    The axis vector is matched against sound-symbolic bias tables for every consonant and
+    vowel, and a Japanese-style mora sequence (CV, bare vowel, geminate <code>Q</code>,
+    moraic nasal <code>N</code>) is sampled probabilistically.
+    <strong>The same drawing always yields the same word</strong> (deterministic generation) —
+    your shape gets, in effect, named.
+  </p>
+
+  <h2>How to use</h2>
+  <ul>
+    <li><strong>Draw</strong> — one stroke on the canvas speaks immediately. ✕ Eraser resets</li>
+    <li><strong>PLAY</strong> — repeats the last utterance exactly, as many times as you like</li>
+    <li><strong>TUNE sliders</strong> — drive the four axes directly</li>
+    <li><strong>Presets</strong> — bouba/kiki/maluma/takete (the classics of sound-symbolism
+        research) plus six Japanese onomatopoeia. First tap speaks the canonical word;
+        later taps improvise variations</li>
+    <li><strong>ROMAJI input</strong> — speak any mora sequence (e.g. <code>cha pu cha pu</code>)</li>
+    <li><strong>LOG</strong> — tap any past word to replay it exactly</li>
+  </ul>
+
+  <h2>About this web version</h2>
+  <p>
+    Onomatoi is the simplified web edition of the iPad/Mac app
+    <em>Onomatoi (formerly Iceface PTS, Phonosymbolic Topology Synthesizer)</em>, which adds
+    pitch contours, melody (warabe-uta) modes and a multi-stroke composing mode.
+    The voice is <strong>PuppeTwin</strong>, a bank of 107 recorded samples.
+  </p>
+  <p>
+    2026-07-08: ported the core's v7 update (shaping into real-sounding onomatopoeia forms,
+    sustained long vowels, continuation-ん, and vowel glides like <em>kai/kou</em>) into this
+    web version. The version through 2026-06-22 is preserved
+    <a href="./iceface_onomatopian.html">here</a>.
+  </p>
+</div>
+
+<footer>
+  <a href="./iceface_onomatoi.html">▶ Iceface Onomatoi</a> ·
+  <a href="https://github.com/Iceface-microtonal/onomatopian">GitHub</a> ·
+  © Iceface — Voice: PuppeTwin
+</footer>
+
+<script>
+"use strict";
+// 日英切替: ブラウザ言語で自動判定 + 手動トグル (選択は localStorage に保存)
+function setLang(lang) {
+  document.getElementById("lang-ja").style.display = lang === "ja" ? "" : "none";
+  document.getElementById("lang-en").style.display = lang === "en" ? "" : "none";
+  document.getElementById("btn-ja").classList.toggle("active", lang === "ja");
+  document.getElementById("btn-en").classList.toggle("active", lang === "en");
+  document.documentElement.lang = lang;
+  try { localStorage.setItem("onomatoi.lang", lang); } catch (e) {}
+}
+document.getElementById("btn-ja").addEventListener("click", () => setLang("ja"));
+document.getElementById("btn-en").addEventListener("click", () => setLang("en"));
+let lang = null;
+try { lang = localStorage.getItem("onomatoi.lang"); } catch (e) {}
+if (lang !== "ja" && lang !== "en") {
+  lang = (navigator.language || "en").toLowerCase().startsWith("ja") ? "ja" : "en";
+}
+setLang(lang);
+</script>
+</body>
+</html>

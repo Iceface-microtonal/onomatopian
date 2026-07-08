@@ -1,20 +1,23 @@
-# Iceface Onomatopian — Web (self-contained)
+# Iceface Onomatoi — Web (self-contained)
 
 **▶ Play: https://iceface-microtonal.github.io/onomatopian/**
 
 Phonosymbolic Topology Synthesizer の簡易 Web 版。このフォルダ単体で完結する
-(iPad 版 v0.4 からの移植。音程変化なし / WARABE なし / COMPOSE なし)。
+(本体 OnomatoiCore からの移植。音程変化なし / WARABE なし / COMPOSE なし)。
 
 ## 内容
 
-- `iceface_onomatopian.html` — アプリ本体 (単一ファイル、依存ライブラリなし)
-- `index.html` — ルート URL からのリダイレクト
-- `about.html` — 解説ページ (日英対応、ブラウザ言語で自動切替)
-- `Consonants/` — 音声サンプル 107 mp3 (cv_* / v_* / n_N、48kbps mono、計約 900KB)
+- `iceface_onomatoi.html` — 現行版 (core v7 移植: legalize/長母音サステイン/継続撥音/diph)
+- `about_onomatoi.html` — 現行版の解説ページ (日英対応)
+- `ConsonantsOnomatoi/` — 現行版の音声サンプル 118 mp3 (cv_*/v_*/n_N/v_*_nn/diph_*、48kbps mono)
+- `iceface_onomatopian.html` — 旧版 (2026-06-22 時点でアーカイブ、以後更新なし)
+- `about.html` — 旧版の解説ページ
+- `Consonants/` — 旧版の音声サンプル 107 mp3
+- `index.html` — ルート URL からのリダイレクト (現行版へ。旧版へのリンクも掲載)
 
 ## 動かし方
 
-wav を fetch するため file:// 直開きは不可。HTTP で配信する:
+mp3 を fetch するため file:// 直開きは不可。HTTP で配信する:
 
 ```bash
 cd "このフォルダ"
@@ -23,7 +26,7 @@ python3 -m http.server 8765
 ```
 
 Web サーバ (静的ホスティング) にフォルダごとアップロードすればそのまま動く。
-サンプル (約 900KB) はページを開いた直後から並列読込される。
+サンプル (現行版で約 1.5MB) はページを開いた直後から並列読込される。
 
 ## 使い方
 
@@ -35,10 +38,25 @@ Web サーバ (静的ホスティング) にフォルダごとアップロード
 - **ROMAJI 直接入力** — 空白区切り (促音=Q, 撥音=N, 拗音=kya 等, ち=chi)。
 - **LOG** — 行をタップするとそのシニフィアンそのものを再生。
 
+## 現行版 (2026-07-08) で core からの移植を追加した点
+
+- **legalize()**: 生の軸→モーラ列を「実在しそうなオノマトペ型」(畳語/り/ん/ー/っ/
+  どーん/がたごと/かい・こう 等) へ整形する層。旧版は「ん を確率的に付けるだけ」の簡易版だった。
+- **長母音サステイン**: ー終わりの語をネイティブループ (loopStart/loopEnd, ゼロクロス近傍)
+  で継続再生。旧版は母音サンプルを単発再生するだけで長い ー は無音になっていた。
+- **継続撥音**: 語中の ん を `v_<v>_nn.mp3` (頭-19dB→尾-17.5dBFS に事前整形済み) で
+  直前母音から続けて鳴らす。無ければ `n_N.mp3` にフォールバック。
+- **CV→V diph**: かい/こう 等の語末連続母音を `diph_<v1><v2>.mp3` の遷移部で鳴らす。
+- **音源ゲート修正**: 旧 `Consonants/` の一部 (母音 v_a〜o, ちゃ行, cv_pi) はデノイズの
+  ゲートで末尾がデジタル無音化していた。`ConsonantsOnomatoi/` は生成時に末尾トリム済み。
+
+データ形式は `FB_VERSION = 2` (旧版の 👍👎 蓄積とは非互換 — legalize でモーラ構造自体が
+変わるため)。
+
 ## フィードバック収集 (👍👎)
 
 発声のたびに 👍 (イメージ通り) / 👎 (違う) を投票できる。投票は端末の
-localStorage に蓄積され (最大 500 件)、FEEDBACK パネルの COPY で JSON 書き出し。
+localStorage (`onomatoi.feedback`) に蓄積され (最大 500 件)、FEEDBACK パネルの COPY で JSON 書き出し。
 各レコードは `{ 軸 4 値, 生成語, モーラ数, redup, 出どころ (draw/preset/...), 評価 }`。
 
 書き出した JSON を開発 (Claude) に渡すと、軸領域 × 音素の偏り集計から
