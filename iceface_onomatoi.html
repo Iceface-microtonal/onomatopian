@@ -207,7 +207,7 @@ const T = uiLang === "ja" ? {
   loadingInitial: "♪ 音声サンプル読込中… — 音が出るまでしばらく時間がかかります",
   voice: "Voice(声): PuppeTwin",
   romajiTitle: "ROMAJI 直接入力",
-  romajiHint: "空白区切り。促音=Q, 撥音=N (例 do N), 拗音=kya 等",
+  romajiHint: "空白区切り、または語をそのまま (bouba も bo u ba も同じ)。促音=Q, 撥音=n (例 don), 拗音=kya 等",
   fbHint: "👍👎 = イメージ通りか記録。COPY で書き出して開発に渡せます",
   fbCopied: "COPIED!",
   fbSaved: (n) => `✓ 記録しました（計${n}件）`,
@@ -219,7 +219,7 @@ const T = uiLang === "ja" ? {
   loadingInitial: "♪ Loading voice samples… — sound will be ready in a moment",
   voice: "Voice: PuppeTwin",
   romajiTitle: "ROMAJI input",
-  romajiHint: "space-separated morae. geminate=Q, moraic nasal=N (e.g. do N), kya/gyu etc.",
+  romajiHint: "space-separated or as one word (bouba = bo u ba). geminate=Q, moraic nasal=n (e.g. don), kya/gyu etc.",
   fbHint: "👍👎 = did it sound like your shape? COPY exports for tuning",
   fbCopied: "COPIED!",
   fbSaved: (n) => `✓ saved (${n} total)`,
@@ -1288,6 +1288,42 @@ function parseMora(token, withQ) {
     return { onset: token[0], nucleus: token[1], durationMs: 180, gapMs: gapFor(token[0]), amplitude: 1, isN: false };
   return null;
 }
+// 語 (space 不要) を greedy CV で自動分割 (Romaji.segmentWord の移植)。
+// 例: "bouba"→bo-u-ba, "kirakira"→ki-ra-ki-ra, "doN"/"don"→do-ん。
+// 3文字(拗音等)→2文字(CV)→1文字(母音) の順に試し、"n" は次が母音/y+母音でなければ撥音。
+function segmentWord(word) {
+  const s = Array.from(word.toLowerCase());
+  const vowels = new Set(["a","i","u","e","o"]);
+  const sub = (a, len) => (a >= 0 && a + len <= s.length) ? s.slice(a, a + len).join("") : null;
+  const moras = [];
+  let i = 0, pendingQ = false;
+  while (i < s.length) {
+    const c = s[i];
+    if (c === "q") { pendingQ = true; i += 1; continue; }
+    if (c === "n") {
+      const nextV = i + 1 < s.length && vowels.has(s[i + 1]);
+      const isNy = i + 2 < s.length && s[i + 1] === "y" && vowels.has(s[i + 2]);
+      if (!nextV && !isNy) {
+        moras.push({ onset: null, nucleus: "a", durationMs: 160,
+                     gapMs: pendingQ ? 70 : 0, amplitude: 1, isN: true, isQ: false });
+        pendingQ = false; i += 1; continue;
+      }
+    }
+    let matched = false;
+    for (const len of [3, 2, 1]) {
+      const t = sub(i, len);
+      if (!t) continue;
+      const m = parseMora(t, pendingQ);
+      if (m) { moras.push(m); pendingQ = false; i += len; matched = true; break; }
+    }
+    if (!matched) i += 1;   // 解析不能な文字は飛ばす
+  }
+  if (pendingQ) {
+    const last = [...moras].reverse().find(m => !m.isN && !m.isQ);
+    if (last) moras.push(finalSokuonMora(last.nucleus));
+  }
+  return moras;
+}
 function playRomaji() {
   ensureCtx();
   const tokens = document.getElementById("romaji-input").value
@@ -1298,11 +1334,18 @@ function playRomaji() {
     if (tk === "q") { pendingQ = true; continue; }
     if (tk === "n" || tk === "nn") {
       moras.push({ onset: null, nucleus: "a", durationMs: 160,
-                   gapMs: pendingQ ? 70 : 0, amplitude: 1, isN: true });
+                   gapMs: pendingQ ? 70 : 0, amplitude: 1, isN: true, isQ: false });
       pendingQ = false; continue;
     }
     const m = parseMora(tk, pendingQ);
-    if (m) moras.push(m);
+    if (m) { moras.push(m); pendingQ = false; continue; }
+    // 単一モーラとして解釈できない (2文字超の塊、例 "bouba"/"kirakira") →
+    // greedy CV 自動分割にフォールバック。space 区切りでなくても語が鳴るように。
+    const seg = segmentWord(tk);
+    if (seg.length > 0) {
+      if (pendingQ) seg[0] = { ...seg[0], gapMs: geminateGapMs(seg[0].onset) };
+      moras.push(...seg);
+    }
     pendingQ = false;
   }
   if (moras.length === 0) return;
