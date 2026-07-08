@@ -133,6 +133,8 @@
   <div class="axis-row"><label>sharp</label><input type="range" id="ax-sharp" min="-1" max="1" step="0.01" value="0"><span class="val" id="val-sharp">+0.00</span></div>
   <div class="axis-row"><label>texture</label><input type="range" id="ax-tex" min="-1" max="1" step="0.01" value="0"><span class="val" id="val-tex">+0.00</span></div>
   <div class="axis-row"><label>bright</label><input type="range" id="ax-bright" min="-1" max="1" step="0.01" value="0"><span class="val" id="val-bright">+0.00</span></div>
+  <div class="axis-row"><label>round</label><input type="range" id="ax-round" min="-1" max="1" step="0.01" value="0"><span class="val" id="val-round">+0.00</span></div>
+  <div class="axis-row"><label>open</label><input type="range" id="ax-open" min="-1" max="1" step="0.01" value="0"><span class="val" id="val-open">+0.00</span></div>
   <div class="chips" id="preset-chips"></div>
   <div class="knob-row" style="margin-top:10px;">
     <span class="knob">bpm <input type="range" id="kn-bpm" min="40" max="240" step="1" value="140"><span id="val-bpm">140</span></span>
@@ -181,6 +183,15 @@
  *  - warabe (旋律) モードなし / COMPOSE モードなし
  *  - 促音は無音 gap のみ (V-Q / 摩擦延長サンプル不使用)
  * 生成ロジック (bias 表 v0.4 / nil-onset / ch 制限 / 決定的 seed) は本体と同一。
+ * v8 追加移植 (2026-07-09, 最新 OnomatoiCore 同期):
+ *  - 口の形 (openness×roundness): 描いた形を口として読む (PCA 回転不変)。丸=あ/横棒=い/
+ *    小円=う/横長楕円=え/縦長=お。母音は口が支配 (brightness は母音判定から撤去)
+ *  - bouba/kiki 第二柱: K表 (無声破裂=kiki/鼻音=bouba)・K_draw (尖り+角密度)・
+ *    語レベル K 整合ゲート (|ΔK|≤0.35, salt 3案)
+ *  - 一筆の連続=口の保持=長音 (あーーー, 伸ばす拍数は描画サイズ由来)
+ *  - 構造単位分割: ループ=音節 (口は単位ごと)・つなぎ線=ー(保持)/ん(語末平線)/っ(ギザ)/直結
+ *  - 長さの応答: 長い描線には反復タイルで最大16モーラの奔流
+ *  - 持続母音テイク v_aaaa〜v_oooo (伸ばし録音) を v_* より優先ロード
  * v7 追加移植 (PhonosymbolicEvent.Onomatopoeia.legalize / FormantSynth Audio v1-v7.9):
  *  - legalize(): 任意のモーラ列を実在オノマトペ型 (畳語/り/ん/ー/っ/どーん/がたごと/かい/こう…)
  *    へ整形する層。これが「Onomatoi らしさ」の核 (音声パイプラインは別途 v7 と対で実装)。
@@ -248,31 +259,31 @@ const CONSONANT_BIAS = {
   g:  { size:  0.6,  sharp: 0.50, tex: 0.0,  bright: -0.3 },
   t:  { size: -0.2,  sharp: 0.70, tex: 0.0,  bright:  0.0 },
   d:  { size:  0.4,  sharp: 0.35, tex: 0.0,  bright: -0.2 },
-  p:  { size: -0.3,  sharp: 0.40, tex: 0.0,  bright:  0.0 },
-  b:  { size:  0.5,  sharp: 0.15, tex: 0.0,  bright: -0.3 },
-  m:  { size:  0.20, sharp: -0.70, tex: 0.0, bright: -0.3 },
+  p:  { size: -0.3,  sharp: 0.40, tex: 0.0,  bright:  0.0, round: 0.30 },
+  b:  { size:  0.5,  sharp: 0.15, tex: 0.0,  bright: -0.3, round: 0.30 },
+  m:  { size:  0.20, sharp: -0.70, tex: 0.0, bright: -0.3, round: 0.30 },
   n:  { size:  0.10, sharp: -0.60, tex: 0.0, bright:  0.0 },
   s:  { size: -0.3,  sharp: 0.60, tex: 0.0,  bright:  0.6 },
   sh: { size:  0.0,  sharp: 0.30, tex: 0.0,  bright: -0.2 },
   ts: { size: -0.2,  sharp: 0.80, tex: 0.3,  bright:  0.2 },
   r:  { size:  0.0,  sharp: -0.20, tex: 0.5, bright:  0.0 },
-  w:  { size:  0.3,  sharp: -0.60, tex: 0.0, bright: -0.4 },
-  ky: { size: -0.5,  sharp: 0.70, tex: 0.0,  bright:  0.65 },
-  gy: { size:  0.30, sharp: 0.40, tex: 0.10, bright:  0.0 },
-  ny: { size:  0.0,  sharp: -0.50, tex: 0.10, bright: 0.30 },
+  w:  { size:  0.3,  sharp: -0.60, tex: 0.0, bright: -0.4, round: 0.60 },
+  ky: { size: -0.5,  sharp: 0.70, tex: 0.0,  bright:  0.65, round: -0.20 },
+  gy: { size:  0.30, sharp: 0.40, tex: 0.10, bright:  0.0, round: -0.20 },
+  ny: { size:  0.0,  sharp: -0.50, tex: 0.10, bright: 0.30, round: -0.20 },
   h:  { size: -0.20, sharp: -0.10, tex: 0.10, bright: 0.20 },
-  f:  { size: -0.10, sharp: -0.20, tex: 0.15, bright: 0.0 },
-  y:  { size:  0.10, sharp: -0.55, tex: 0.20, bright: 0.50 },
+  f:  { size: -0.10, sharp: -0.20, tex: 0.15, bright: 0.0, round: 0.50 },
+  y:  { size:  0.10, sharp: -0.55, tex: 0.20, bright: 0.50, round: -0.20 },
   z:  { size:  0.20, sharp: 0.20, tex: 0.40,  bright: 0.20 },
   j:  { size:  0.30, sharp: 0.10, tex: 0.45,  bright: 0.10 },
   ch: { size: -0.35, sharp: 0.70, tex: 0.15,  bright: 0.25 },  // bias v2
 };
-const VOWEL_BIAS = {
-  a: { size:  0.80, sharp:  0.0, bright: -0.30 },
-  o: { size:  0.55, sharp: -0.3, bright: -0.70 },
-  u: { size:  0.20, sharp: -0.4, bright: -0.50 },
-  e: { size: -0.30, sharp:  0.0, bright:  0.60 },
-  i: { size: -0.85, sharp:  0.3, bright:  0.90 },
+const VOWEL_BIAS = {   // round=円唇(横引き−↔すぼめ+) open=開口 (口の形実験・作者の口観)
+  a: { size:  0.80, sharp:  0.0, bright: -0.30, round:  0.0,  open:  0.85 },
+  o: { size:  0.55, sharp: -0.3, bright: -0.70, round:  0.70, open:  0.30 },
+  u: { size:  0.20, sharp: -0.4, bright: -0.50, round:  0.80, open: -0.40 },
+  e: { size: -0.30, sharp:  0.0, bright:  0.60, round: -0.30, open:  0.45 },
+  i: { size: -0.85, sharp:  0.3, bright:  0.90, round: -0.80, open: -0.70 },
 };
 // nil-onset (単独母音) スコア v0.4
 const NIL_BASE = -0.68, NIL_SHARP_PENALTY = 1.45, NIL_DULL_BONUS = 0.0;
@@ -281,8 +292,12 @@ const NIL_BASE = -0.68, NIL_SHARP_PENALTY = 1.45, NIL_DULL_BONUS = 0.0;
 function axesSeed(ax, salt) {
   // 1e-4 量子化 + FNV-1a 32bit (Swift 版 deterministicSeed の 32bit 簡易版)
   let h = 0x811c9dc5 ^ (salt >>> 0);
-  for (const v of [ax.size, ax.sharp, ax.tex, ax.bright]) {
-    const q = Math.round(v * 10000) | 0;
+  const qs = [ax.size, ax.sharp, ax.tex, ax.bright].map(v => Math.round(v * 10000) | 0);
+  const qr = Math.round((ax.round || 0) * 10000) | 0;
+  const qo = Math.round((ax.open || 0) * 10000) | 0;
+  if (qr !== 0) qs.push(qr);
+  if (qo !== 0) qs.push((0x9e3779b9 ^ qo) | 0);
+  for (const q of qs) {
     h ^= (q >>> 0);
     h = Math.imul(h, 0x01000193);
     h ^= h >>> 13;
@@ -302,9 +317,56 @@ function mulberry32(seed) {
 
 // ─── CVGenerator (Swift v0.4 の移植) ───
 function scoreAgainst(target, bias) {
+  const tr = target.round || 0;
   return -(0.7 * Math.abs(bias.size - target.size)
          + Math.abs(bias.sharp - target.sharp)
-         + Math.abs(bias.bright - target.bright));
+         + Math.abs(bias.bright - target.bright)
+         + Math.abs(tr) * 0.8 * Math.abs((bias.round || 0) - tr));
+}
+// 母音専用スコア (口の形実験): 口 (open×round) が支配、brightness 不使用 (口の形から派生するため)。
+// 口が中立 (0,0) なら size/sharp のみ = 旧挙動に近い。
+function scoreVowel(target, bias) {
+  const tr = target.round || 0, to = target.open || 0;
+  const ms = Math.min(1, (Math.abs(to) + Math.abs(tr)) / 1.2);
+  return -(0.70 * (1 - ms) * Math.abs(bias.size - target.size)
+         + Math.abs(bias.sharp - target.sharp)
+         + Math.abs(tr) * 1.40 * Math.abs((bias.round || 0) - tr)
+         + Math.abs(to) * 1.30 * Math.abs((bias.open || 0) - to));
+}
+
+// ─── BoubaKiki (第二柱: 大域音象徴判定, Articulation.swift の移植) ───
+const K_CONS = { ts:0.90, k:0.85, ch:0.85, t:0.80, ky:0.80, p:0.60, s:0.60, sh:0.35,
+                 d:0.30, g:0.25, gy:0.20, z:0.15, j:0.10, b:0.05, h:-0.15, f:-0.25,
+                 r:-0.35, ny:-0.50, n:-0.60, y:-0.60, m:-0.75, w:-0.80 };
+const K_VOWEL = { i:0.55, e:0.15, a:-0.05, o:-0.35, u:-0.45 };
+function consonantK(c) { return c === null ? -0.50 : (K_CONS[c] ?? 0); }
+function drawK(sharp, corners) {
+  const ct = 2 * Math.min(1, corners / 6) - 1;
+  return Math.max(-1, Math.min(1, 0.70 * sharp + 0.30 * ct));
+}
+function wordK(moras) {
+  let sum = 0, count = 0, hasGem = false, hasLong = false, prevV = null;
+  for (const m of moras) {
+    if (m.gapMs > 0 || m.isQ) hasGem = true;
+    if (m.isQ) { prevV = null; continue; }          // 語末促音 = 断ちのジェスチャ (平均に入れない)
+    if (m.isN) { sum += -0.55; count++; prevV = null; continue; }
+    if (m.onset === null && prevV === m.nucleus) hasLong = true;
+    sum += 0.7 * consonantK(m.onset) + 0.3 * (K_VOWEL[m.nucleus] ?? 0);
+    count++;
+    prevV = m.nucleus;
+  }
+  if (count === 0) return hasGem ? 0.15 : 0;
+  let k = sum / count;
+  if (hasGem) k += 0.15;
+  if (hasLong) k -= 0.10;
+  return Math.max(-1, Math.min(1, k));
+}
+function scoreConsonantKiki(target, kiki, c, bias) {
+  const tr = target.round || 0;
+  return -(1.20 * Math.abs(consonantK(c) - kiki)
+         + 0.45 * Math.abs(bias.size - target.size)
+         + 0.30 * Math.abs(bias.bright - target.bright)
+         + Math.abs(tr) * 0.8 * Math.abs((bias.round || 0) - tr));
 }
 function softmaxSample(scores, temperature, rand) {
   if (scores.length === 0) return null;
@@ -325,16 +387,19 @@ function softmaxSample(scores, temperature, rand) {
   }
   return exps[exps.length - 1][0];
 }
-function pickConsonant(target, prevOnset, temperature, rand) {
+function pickConsonant(target, prevOnset, temperature, rand, kiki = null) {
   const scores = [];
-  // nil-onset 候補 (sharpness 中心スコア v0.4)
+  // nil-onset 候補: burst の要否は kiki (あれば) で判断
+  const sharpLike = kiki ?? target.sharp;
   let nilScore = NIL_BASE
-               - NIL_SHARP_PENALTY * Math.max(0, target.sharp)
-               + NIL_DULL_BONUS * Math.max(0, -target.sharp);
+               - NIL_SHARP_PENALTY * Math.max(0, sharpLike)
+               + NIL_DULL_BONUS * Math.max(0, -sharpLike);
   if (prevOnset === null) nilScore -= 0.4;     // 連続 V 抑制
   scores.push([null, nilScore]);
   for (const c of CONSONANTS) {
-    let s = scoreAgainst(target, CONSONANT_BIAS[c]);
+    let s = (kiki !== null)
+      ? scoreConsonantKiki(target, kiki, c, CONSONANT_BIAS[c])
+      : scoreAgainst(target, CONSONANT_BIAS[c]);
     if (prevOnset === c) s -= 0.3;             // 同子音連続ペナルティ
     scores.push([c, s]);
   }
@@ -344,7 +409,7 @@ function pickVowel(target, redupFirst, temperature, restrict, rand) {
   const scores = [];
   for (const v of VOWELS) {
     if (restrict && !restrict.has(v)) continue;
-    let s = scoreAgainst(target, VOWEL_BIAS[v]);
+    let s = scoreVowel(target, VOWEL_BIAS[v]);
     if (redupFirst && redupFirst === v) s += 0.3;
     scores.push([v, s]);
   }
@@ -399,8 +464,9 @@ function biasVoicing(m, size) {
   return { ...m, onset: nc };
 }
 // 語頭 /p/ 積極バイアス: crisp+bright のとき、語頭の唇音(h/f/b)を /p/ へ (は→ぱ・ふ→ぷ・ば→ぱ)。
-function biasInitialP(m, axes) {
-  if (!(axes.sharp > 0.35 && axes.bright > 0.0)) return m;
+function biasInitialP(m, axes, kiki = null) {
+  const sharpLike = kiki ?? axes.sharp;
+  if (!(sharpLike > 0.35 && axes.bright > 0.0)) return m;
   if (!(m.onset === "h" || m.onset === "f" || m.onset === "b")) return m;
   return { ...m, onset: "p" };
 }
@@ -442,9 +508,12 @@ function diphPartner(v, brightness) {
   if (v === "e") return "i";
   return null;   // i, u
 }
-function chooseTemplate(rootLen, axes, inputHasN, inputHasLong, inputRedup, inputAblaut, inputRedupN, lengthHint) {
+function chooseTemplate(rootLen, axes, inputHasN, inputHasLong, inputRedup, inputAblaut, inputRedupN, lengthHint, sustained = false, kiki = null) {
+  const sharpLike = kiki ?? axes.sharp;   // bouba/kiki 柱: 鋭さ判定は K_draw (あれば)
   if (inputAblaut) return "ablautRedup";
   if (inputRedupN) return "reduplicatedN";
+  // 一筆の連続 (口を保持) → 長音 (あーーー)。反復は描線に反復特徴がある時だけ。
+  if (sustained) return "heldVowel";
   if (rootLen >= 2 && (inputRedup || axes.tex > 0.5)) {
     if (inputHasN) return "reduplicatedN";
     if (inputHasLong) return "reduplicatedLong";
@@ -453,23 +522,23 @@ function chooseTemplate(rootLen, axes, inputHasN, inputHasLong, inputRedup, inpu
   if (inputHasN) return "moraicN";
   if (inputHasLong) return "longVowel";
   if (lengthHint !== null && lengthHint >= 4 && rootLen >= 2) {
-    if (axes.size > 0.25 && axes.sharp > 0.15) return "longVowelN";
-    if (axes.sharp > 0.2 && axes.tex < 0.3) return "geminateRi";
+    if (axes.size > 0.25 && sharpLike > 0.15) return "longVowelN";
+    if (sharpLike > 0.2 && axes.tex < 0.3) return "geminateRi";
     return "moraicNRi";
   }
-  const impact = 0.5 * axes.size + 0.35 * axes.sharp - 0.3 * axes.tex;
+  const impact = 0.5 * axes.size + 0.35 * sharpLike - 0.3 * axes.tex;
   if (impact > 0.45) return (rootLen >= 2 && axes.size > 0.45) ? "longVowelN" : "moraicN";
-  if (rootLen >= 2 && axes.sharp < -0.25 && axes.tex > -0.2) return "reduplicated";
-  if (axes.sharp > 0.4 && axes.tex < 0.15) return "geminate";
-  if (axes.sharp > 0.25) return "moraicN";
+  if (rootLen >= 2 && sharpLike < -0.25 && axes.tex > -0.2) return "reduplicated";
+  if (sharpLike > 0.4 && axes.tex < 0.15) return "geminate";
+  if (sharpLike > 0.25) return "moraicN";
   if (axes.bright > 0.3 && axes.tex < 0.25) return "diphFinal";
   if (axes.size > 0.3) return "longVowel";
-  if (axes.sharp < -0.25) return "longVowel";
+  if (sharpLike < -0.25) return "longVowel";
   return rootLen >= 2 ? "ri" : "moraicN";
 }
 // 任意のモーラ列を実在オノマトペ型へ整形。決定的 (rng を使わない)。
 // lengthHint: 描線の複雑さ由来のモーラ数。大きいほど長い(4-5モーラ)テンプレートを選びやすい。
-function legalize(moras, axes, lengthHint = null) {
+function legalize(moras, axes, lengthHint = null, sustained = false, kiki = null) {
   const voiced = moras;   // web 版に rest モーラは無い
   const loops = voiced.filter(m => !m.isN);
   if (loops.length === 0) return moras;
@@ -482,7 +551,7 @@ function legalize(moras, axes, lengthHint = null) {
     rootRaw = [loops[0]];
   }
   let root = rootRaw.map(stripGap).map(m => biasVoicing(m, axes.size));
-  if (root.length > 0) root[0] = biasInitialP(root[0], axes);
+  if (root.length > 0) root[0] = biasInitialP(root[0], axes, kiki);
   if (root.length === 2 && root[1].onset === null) {
     root[1] = { onset: root[0].onset ?? "r", nucleus: root[1].nucleus,
                 durationMs: root[1].durationMs, gapMs: 0, amplitude: 1.0, isN: false, isQ: false };
@@ -507,7 +576,7 @@ function legalize(moras, axes, lengthHint = null) {
   const inputRedupN = detectReduplicatedN(voiced);
 
   const template = chooseTemplate(rootLen, axes, inputHasN, inputHasLong, inputRedup,
-                                  inputAblaut, inputRedupN, lengthHint);
+                                  inputAblaut, inputRedupN, lengthHint, sustained, kiki);
 
   let out;
   const last = root[root.length - 1];
@@ -529,17 +598,49 @@ function legalize(moras, axes, lengthHint = null) {
       out = partner ? root.concat([heldVowelMora(partner)]) : root.concat([moraicNMora()]);
       break;
     }
+    case "heldVowel": {
+      // 一筆の連続 = 口を保持 = 長音 (あーーー/にょーーー)。伸ばす拍数は描画サイズ由来。
+      const heldLen = Math.max(2, Math.min(5, Math.round(3.5 + axes.size * 1.5)));
+      out = [root[0]];
+      for (let i = 1; i < heldLen; i++) out.push(heldVowelMora(root[0].nucleus));
+      break;
+    }
     default: out = root;
   }
-  if (out.length > 5) out = out.slice(0, 5);
+  // 長さの応答: 長く複雑な描線 (lengthHint > 5) には反復単位をタイルして語の長さで応える
+  // (ぎじゃぎじゃぎじゃぎじゃ… 最大16モーラ)。2周目以降は decrescendo。普通の描線は従来 ≤5。
+  const targetLen = Math.max(5, Math.min(16, lengthHint ?? 5));
+  if (targetLen > 5) {
+    let tileUnit = null;
+    if (template === "reduplicated") tileUnit = root;
+    else if (template === "reduplicatedN") tileUnit = [root[0], moraicNMora()];
+    else if (template === "reduplicatedLong") tileUnit = [root[0], heldVowelMora(root[0].nucleus)];
+    else if (template === "ablautRedup" && out.length >= 2) tileUnit = out.slice();
+    if (tileUnit && tileUnit.length > 0) {
+      let cycle = Math.floor(out.length / tileUnit.length);
+      while (out.length + tileUnit.length <= targetLen) {
+        const amp = Math.max(0.7, 1.0 - 0.08 * cycle);
+        out = out.concat(tileUnit.map(m => ({ ...m, amplitude: amp })));
+        cycle++;
+      }
+    }
+  }
+  if (out.length > targetLen) out = out.slice(0, targetLen);
   return out.map(nativize);
 }
 
-function generate(axes, rand, temperature = 0.4) {
-  const rawCount = 2.0 + (axes.tex + 1.0) * 1.5;
-  const moraCount = Math.max(1, Math.min(6, Math.round(rawCount)));
+function generate(axes, rand, temperature = 0.4, opts = {}) {
+  const { moraCountOverride = null, kiki = null, sustained = false, lengthHint = null } = opts;
+  let moraCount;
+  if (moraCountOverride !== null) {
+    moraCount = Math.max(1, Math.min(16, moraCountOverride));
+  } else {
+    const rawCount = 2.0 + (axes.tex + 1.0) * 1.5;
+    moraCount = Math.max(1, Math.min(6, Math.round(rawCount)));
+  }
+  const kikiLike = kiki ?? axes.sharp;   // bouba/kiki 柱: 鋭さ判定は K_draw (あれば)
   const isRedup = axes.tex > 0.6;
-  const geminateOn = (axes.tex > 0.6 && axes.sharp > 0.0) || axes.tex > 0.85;
+  const geminateOn = (axes.tex > 0.6 && kikiLike > 0.0) || axes.tex > 0.85;
   // v0.5: 準畳語 (gata-goto / tik-tok 型)。完全畳語に届かない 4 mora 以上の語を、
   // 子音骨格 ABAB + 奇数サイクル母音交替の構造にして「繰り返し」と認識されやすくする。
   let quasiRedup = false;
@@ -552,7 +653,7 @@ function generate(axes, rand, temperature = 0.4) {
   const unique = [];
   let prevOnset = undefined, firstVowel = null;
   for (let i = 0; i < uniqueCount; i++) {
-    const onset = pickConsonant(axes, prevOnset === undefined ? "" : prevOnset, temperature, rand);
+    const onset = pickConsonant(axes, prevOnset === undefined ? "" : prevOnset, temperature, rand, kiki);
     let restrict = null;
     if (onset && (PALATALIZED.has(onset) || SEMIVOWEL.has(onset))) restrict = new Set(["a","u","o"]);
     // ch は cha/chi/chu/cho/che 全て収録済 (2026-06 に che 追加) → 全母音可。
@@ -578,7 +679,7 @@ function generate(axes, rand, temperature = 0.4) {
 
   // v7: 実在オノマトペ型への整形 (legalize が語末ん/連続母音(かい/こう)/促音っ/長音ー/畳語末尾
   // を音象徴 (axes) から一括で選ぶ。旧「ん を確率的に末尾付与するだけ」の簡易版を置き換え)。
-  const moras = legalize(rawMoras, axes, moraCount);
+  const moras = legalize(rawMoras, axes, lengthHint ?? moraCount, sustained, kiki);
   const finalRedup = moraPeriod(moras) < moras.length;
 
   const f0 = Math.max(80, Math.min(400, 200 * (1 + 0.2 * axes.bright - 0.2 * axes.size)));
@@ -674,16 +775,247 @@ function extractAxes(points, w, h) {
 
   const meanY = points.reduce((a,p) => a + p.y, 0) / points.length;
   const bright = clamp(1 - 2 * (meanY / h));
-  return { size, sharp, tex, bright };
+
+  // ─── 口の形 (open×round): 描いた形を口として読む (AxisExtractor §5+6 の移植, PCA 版) ───
+  // PCA (共分散固有値): 回転不変の伸び × 主軸の水平度。軸平行では bbox 縦横比と厳密同値。
+  let mx = 0, my = 0;
+  for (const p of points) { mx += p.x; my += p.y; }
+  mx /= points.length; my /= points.length;
+  let cxx = 0, cyy = 0, cxy = 0;
+  for (const p of points) {
+    const dx = p.x - mx, dy = p.y - my;
+    cxx += dx * dx; cyy += dy * dy; cxy += dx * dy;
+  }
+  cxx /= points.length; cyy /= points.length; cxy /= points.length;
+  const halfTr = (cxx + cyy) / 2;
+  const detRoot = Math.sqrt(Math.max(0, (cxx - cyy) * (cxx - cyy) / 4 + cxy * cxy));
+  const lam1 = halfTr + detRoot, lam2 = Math.max(halfTr - detRoot, 1e-12);
+  const elong = Math.sqrt(lam1 / lam2);
+  const spreadMag = Math.log2(Math.min(8, Math.max(1, elong))) / 3;
+  const horiz = detRoot > 1e-9 ? (cxx - cyy) / (2 * detRoot) : 0;   // cos2θ: 水平+1↔垂直−1
+  const spreadRaw = clamp(spreadMag * horiz);
+
+  // 開き (open): 囲んだ面積 (shoelace) × 描画サイズ × 閉合度 × 縦の開き (横長ほど顎は落ちない)。
+  let area = 0;
+  for (let i = 0; i < points.length; i++) {
+    const p0 = points[i], p1 = points[(i + 1) % points.length];
+    area += p0.x * p1.y - p1.x * p0.y;
+  }
+  area = Math.abs(area) / 2;
+  const closingGap = Math.hypot(points[0].x - points[points.length-1].x,
+                                points[0].y - points[points.length-1].y);
+  const closedness = 1 - Math.min(1, closingGap / Math.max(bboxDiag * 0.5, 1));
+  const fill = Math.min(1, area / Math.max(1e-6, 8 * Math.sqrt(lam1 * lam2)));
+  const sizeN = Math.min(1, (bboxDiag / canvasDiag) / 0.45);
+  const verticalFactor = 1 - 0.5 * Math.max(0, spreadRaw);
+  const open = clamp(2 * closedness * fill * sizeN * verticalFactor - 0.55);
+
+  // 円唇 (round): 横長→横引き(−)、小さく閉じた丸→すぼめ(+, smoothstep ゲート)。
+  const smoothstep = (e0, e1, x) => {
+    const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
+    return t * t * (3 - 2 * t);
+  };
+  const closedGate = smoothstep(0.45, 0.75, closedness);
+  const smallGate = smoothstep(0.10, -0.40, open);
+  const roundShapeGate = Math.max(0, 1 - Math.abs(spreadRaw) / 0.5);
+  const purse = 0.5 * closedGate * smallGate * roundShapeGate;
+  const round = clamp(-spreadRaw + purse - 0.18 * Math.max(0, sharp));
+
+  return { size, sharp, tex, bright, round, open };
 }
 function applyHandCorrection(ax, level) {
   const amt = Math.max(0, Math.min(1, level));
+  // spread で全軸を保持 (adjusted 相当)。全書きは後から足された軸 (口の2軸) を落とす事故のもと。
   return {
-    size: ax.size,
+    ...ax,
     sharp: Math.max(-1, Math.min(1, ax.sharp + amt * 0.6)),
     tex: ax.tex * (1 - amt * 0.3),
-    bright: ax.bright,
   };
+}
+
+// ─── strokeComplexity (AxisExtractor.swift v3 の移植: 角+ループ+大きさ → モーラ数) ───
+function strokeComplexity(points, w, h, maxMora = 16) {
+  if (points.length < 2 || w <= 0 || h <= 0)
+    return { corners: 0, loops: 0, moraCount: 1 };
+  let minX = points[0].x, maxX = points[0].x, minY = points[0].y, maxY = points[0].y;
+  for (const p of points) {
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+  }
+  const bboxDiag = Math.hypot(maxX - minX, maxY - minY);
+  const canvasDiag = Math.hypot(w, h);
+  let pathLen = 0;
+  for (let i = 1; i < points.length; i++)
+    pathLen += Math.hypot(points[i].x - points[i-1].x, points[i].y - points[i-1].y);
+  const sizeRatio = bboxDiag / Math.max(canvasDiag, 1);
+  if (sizeRatio < 0.05 && pathLen < canvasDiag * 0.08)
+    return { corners: 0, loops: 0, moraCount: 1 };
+  // 角: 窓つき方向変化 (cornerSensitivity 0.77 → 閾値 0.83rad ≈ 47°)、近接は 1 つに
+  const k = Math.max(1, Math.min(Math.floor(points.length / 24), 8));
+  let corners = 0, lastCorner = -1000;
+  for (let i = k; i < points.length - k; i++) {
+    const v1x = points[i].x - points[i-k].x, v1y = points[i].y - points[i-k].y;
+    const v2x = points[i+k].x - points[i].x, v2y = points[i+k].y - points[i].y;
+    const l1 = Math.hypot(v1x, v1y), l2 = Math.hypot(v2x, v2y);
+    if (l1 < 1e-6 || l2 < 1e-6) continue;
+    const turn = Math.acos(Math.max(-1, Math.min(1, (v1x*v2x + v1y*v2y) / (l1*l2))));
+    if (turn > 0.83 && i - lastCorner >= k) { corners++; lastCorner = i; }
+  }
+  let totalTurning = 0;
+  for (let i = 1; i < points.length - 1; i++) {
+    const v1x = points[i].x - points[i-1].x, v1y = points[i].y - points[i-1].y;
+    const v2x = points[i+1].x - points[i].x, v2y = points[i+1].y - points[i].y;
+    const cross = v1x * v2y - v1y * v2x, dot = v1x * v2x + v1y * v2y;
+    if (Math.abs(cross) > 1e-9 || Math.abs(dot) > 1e-9) totalTurning += Math.atan2(cross, dot);
+  }
+  const loops = Math.round(Math.abs(totalTurning) / (2 * Math.PI));
+  const elements = corners + loops;
+  const comp = elements <= 4 ? elements : 4 + (elements - 4) * 0.5;
+  const sizeToLength = 0.38;
+  const sizeGateRaw = Math.max(0.3, Math.min(1.15, sizeRatio / 0.5));
+  const sizeGate = sizeGateRaw * sizeToLength + (1 - sizeToLength);
+  const base = 1 + Math.max(0, sizeRatio - 0.5) * 2 * sizeToLength;
+  const rawMora = base + comp * sizeGate;
+  const moraCount = Math.max(1, Math.min(maxMora, Math.round(rawMora)));
+  return { corners, loops, moraCount };
+}
+
+// ─── StrokeSegmenter (構造単位分割: ループ=音節, つなぎ線=ー/ん/っ/直結) ───
+const LOOP_WINDING = 2 * Math.PI * 0.75;
+function segmentStroke(points) {
+  if (points.length < 8) return { units: [], loopCount: 0 };
+  const n = points.length;
+  const T = new Array(n).fill(0);
+  for (let i = 1; i < n - 1; i++) {
+    const v1x = points[i].x - points[i-1].x, v1y = points[i].y - points[i-1].y;
+    const v2x = points[i+1].x - points[i].x, v2y = points[i+1].y - points[i].y;
+    const cross = v1x * v2y - v1y * v2x, dot = v1x * v2x + v1y * v2y;
+    T[i] = T[i-1] + ((Math.abs(cross) > 1e-12 || Math.abs(dot) > 1e-12) ? Math.atan2(cross, dot) : 0);
+  }
+  T[n-1] = T[n-2];
+  const arcLen = pts => { let a = 0; for (let i = 1; i < pts.length; i++) a += Math.hypot(pts[i].x-pts[i-1].x, pts[i].y-pts[i-1].y); return a; };
+  const bounds = [];
+  let regionStart = 0, b = 1;
+  while (b < n) {
+    let found = -1;
+    for (let a = b - 1; a >= regionStart; a--) {
+      if (Math.abs(T[b] - T[a]) >= LOOP_WINDING) { found = a; break; }
+    }
+    if (found >= 0) {
+      // 両側拡張: 巻きが積み続ける間、入り口/尻尾の弧を回収 (つなぎへの漏れ=偽の角を防ぐ)
+      const dir = (T[b] - T[found]) >= 0 ? 1 : -1;
+      let end = b;
+      while (end + 1 < n && dir * (T[end+1] - T[end]) > 0.02
+             && Math.abs(T[end+1] - T[found]) < 2 * Math.PI * 1.2) end++;
+      let start = found;
+      while (start - 1 >= regionStart && dir * (T[start] - T[start-1]) > 0.02
+             && Math.abs(T[end] - T[start-1]) < 2 * Math.PI * 1.2) start--;
+      if (start > regionStart + 2) bounds.push(["connector", regionStart, start]);
+      bounds.push(["loop", start, end]);
+      regionStart = end;
+      b = end;
+    }
+    b++;
+  }
+  if (regionStart < n - 2) bounds.push(["connector", regionStart, n - 1]);
+  const units = bounds.map(([kind, a, z]) => {
+    const pts = points.slice(a, Math.min(z, n - 1) + 1);
+    return { kind, points: pts, arcLength: arcLen(pts) };
+  });
+  return { units, loopCount: units.filter(u => u.kind === "loop").length };
+}
+function classifyConnector(u, isTrailing, w, h) {
+  const canvasDiag = Math.hypot(w, h);
+  const lenRatio = u.arcLength / Math.max(canvasDiag, 1);
+  if (lenRatio < 0.045) return { role: "direct" };
+  // ギザギザ (角 ≥2) → っ
+  const pts = u.points, n = pts.length;
+  if (n >= 7) {
+    const k = Math.max(1, Math.min(Math.floor(n / 8), 6));
+    let corners = 0, last = -1000;
+    for (let i = k; i < n - k; i++) {
+      const v1x = pts[i].x - pts[i-k].x, v1y = pts[i].y - pts[i-k].y;
+      const v2x = pts[i+k].x - pts[i].x, v2y = pts[i+k].y - pts[i].y;
+      const l1 = Math.hypot(v1x, v1y), l2 = Math.hypot(v2x, v2y);
+      if (l1 < 1e-6 || l2 < 1e-6) continue;
+      const turn = Math.acos(Math.max(-1, Math.min(1, (v1x*v2x + v1y*v2y) / (l1*l2))));
+      if (turn > 1.1 && i - last >= k) { corners++; last = i; }
+    }
+    if (corners >= 2) return { role: "cut" };
+  }
+  if (isTrailing) {
+    let minY = pts[0].y, maxY = pts[0].y;
+    for (const p of pts) { minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); }
+    if (maxY - minY < 0.35 * u.arcLength) return { role: "nasal" };   // 語末の平線 → ん
+  }
+  let beats = 1;
+  if (lenRatio > 0.18) beats = 2;
+  if (lenRatio > 0.35) beats = 3;
+  return { role: "hold", beats };   // 既定: ー (口の保持・線の長さ=拍数)
+}
+// polishUnits: 単位語の磨き (テンプレ再形成はしない = 描いた構造を保存)
+function polishUnits(moras, axes, kiki = null) {
+  if (moras.length === 0) return moras;
+  let out = moras.map(m => biasVoicing(m, axes.size));
+  const fi = out.findIndex(m => m.onset !== null && !m.isN);
+  if (fi >= 0) out[fi] = biasInitialP(out[fi], axes, kiki);
+  out = out.map(nativize);
+  if (out.length > 16) out = out.slice(0, 16);
+  return out;
+}
+function generateFromUnits(units, w, h, globalAxes, kiki = null, temperature = 0.4) {
+  const step = 0.0001 + 0.7 * 0.4;   // tuning.repetition 0.7: 同じループ = 同じ音節
+  const quant = ax => {
+    const q = v => Math.round(v / step) * step;
+    return { size: q(ax.size), sharp: q(ax.sharp), tex: q(ax.tex), bright: q(ax.bright),
+             round: q(ax.round || 0), open: q(ax.open || 0) };
+  };
+  const makeMoras = salt => {
+    const out = [];
+    let prevVowel = null, pendingGap = false;
+    units.forEach((u, idx) => {
+      if (u.kind === "loop") {
+        const ax = quant(extractAxes(u.points, w, h));
+        const rand = mulberry32(axesSeed(ax, salt));
+        const onset = pickConsonant(ax, "", temperature, rand, kiki);
+        let restrict = null;
+        if (onset && (PALATALIZED.has(onset) || SEMIVOWEL.has(onset))) restrict = new Set(["a","u","o"]);
+        const vowel = pickVowel(ax, null, temperature, restrict, rand);
+        out.push({ onset, nucleus: vowel, durationMs: 170 + ax.size * 20,
+                   gapMs: pendingGap ? geminateGapMs(onset) : 0,
+                   amplitude: 1.0, isN: false, isQ: false });
+        pendingGap = false;
+        prevVowel = vowel;
+      } else {
+        const isTrailing = idx === units.length - 1;
+        const c = classifyConnector(u, isTrailing, w, h);
+        if (c.role === "hold" && prevVowel !== null) {
+          for (let i = 0; i < c.beats; i++) out.push(heldVowelMora(prevVowel));
+        } else if (c.role === "nasal") {
+          out.push(moraicNMora());
+        } else if (c.role === "cut") {
+          if (isTrailing && prevVowel !== null) out.push(finalSokuonMora(prevVowel));
+          else pendingGap = true;
+        }
+      }
+    });
+    return polishUnits(out, globalAxes, kiki);
+  };
+  let moras;
+  if (kiki !== null) {
+    let best = null, bestD = Infinity;
+    for (let a = 0; a < 3; a++) {
+      const cand = makeMoras(a);
+      const d = Math.abs(wordK(cand) - kiki);
+      if (d < bestD) { best = cand; bestD = d; }
+      if (d <= 0.35) break;
+    }
+    moras = best;
+  } else {
+    moras = makeMoras(0);
+  }
+  const f0 = Math.max(80, Math.min(400, 200 * (1 + 0.2 * globalAxes.bright - 0.2 * globalAxes.size)));
+  return { axes: { ...globalAxes }, moras, baseF0: f0, isRedup: moraPeriod(moras) < moras.length };
 }
 
 // ─── プリセット (PresetShape.swift v0.4 の 10 種) ───
@@ -778,6 +1110,12 @@ function sampleUrlCandidates(key) {
     const vowel = key.slice(2, -3);   // "v_a_nn" → "a"
     const fb = CONTN_FALLBACK[vowel];
     if (fb) return [key, fb];
+  }
+  // 母音単独は持続テイク (v_aaaa 等, 2026-07-09 録音・~1s 定常部) を優先 —
+  // 長音 (あーーー/かーーー) が computeLoopPoints の forward loop で減衰せず伸びる。
+  if (/^v_[aiueo]$/.test(key)) {
+    const v = key.slice(2);
+    return ["v_" + v.repeat(4), key];
   }
   return [key];
 }
@@ -1090,10 +1428,12 @@ function playAndRemember(event, axesUsed, log, src = "tune") {
 
 function setSliders(ax) {
   lastAxes = { ...ax };
-  const pairs = [["size","size"],["sharp","sharp"],["tex","tex"],["bright","bright"]];
+  const pairs = [["size","size"],["sharp","sharp"],["tex","tex"],["bright","bright"],
+                 ["round","round"],["open","open"]];
   for (const [id, key] of pairs) {
-    document.getElementById("ax-" + id).value = ax[key];
-    document.getElementById("val-" + id).textContent = (ax[key] >= 0 ? "+" : "") + ax[key].toFixed(2);
+    const v = ax[key] ?? 0;
+    document.getElementById("ax-" + id).value = v;
+    document.getElementById("val-" + id).textContent = (v >= 0 ? "+" : "") + v.toFixed(2);
   }
 }
 function readSliders() {
@@ -1102,6 +1442,8 @@ function readSliders() {
     sharp: Number(document.getElementById("ax-sharp").value),
     tex: Number(document.getElementById("ax-tex").value),
     bright: Number(document.getElementById("ax-bright").value),
+    round: Number(document.getElementById("ax-round").value),
+    open: Number(document.getElementById("ax-open").value),
   };
 }
 function showResult(event) {
@@ -1141,9 +1483,23 @@ function renderLog() {
 }
 
 // 生成 + 再生 + ログ (決定的 seed)
-function generateAndPlay(axes, salt = 0, log = true, src = "tune") {
-  const rand = mulberry32(axesSeed(axes, salt));
-  const event = generate(axes, rand);
+function generateAndPlay(axes, salt = 0, log = true, src = "tune", opts = {}) {
+  let event;
+  if (opts.kiki != null) {
+    // 語レベル K 整合ゲート: 語の K が描画の K とズレたら salt を変えて再試行 (最大3案・決定的)
+    let best = null, bestD = Infinity;
+    for (let a = 0; a < 3; a++) {
+      const rand = mulberry32(axesSeed(axes, salt + a));
+      const ev = generate(axes, rand, 0.4, opts);
+      const d = Math.abs(wordK(ev.moras) - opts.kiki);
+      if (d < bestD) { best = ev; bestD = d; }
+      if (d <= 0.35) break;
+    }
+    event = best;
+  } else {
+    const rand = mulberry32(axesSeed(axes, salt));
+    event = generate(axes, rand, 0.4, opts);
+  }
   playAndRemember(event, axes, log, src);
   return event;
 }
@@ -1212,7 +1568,20 @@ canvas.addEventListener("pointerup", ev => {
     const hc = Number(document.getElementById("kn-hc").value);
     const ax = applyHandCorrection(raw, hc);
     setSliders(ax);
-    generateAndPlay(ax, 0, true, "draw");   // 同じ描写 = 同じ語 (決定的)
+    // 最新 Core 適応 (2026-07-09): 複雑さ → 語長 / bouba・kiki 大域判定 / 一筆連続=長音 /
+    // 構造単位 (ループ≥2 → ループ=音節・つなぎ線=ー,ん,っ,直結)。同じ描写 = 同じ語 (決定的)。
+    const cx = strokeComplexity(stroke, rect.width, rect.height, 16);
+    const kDraw = drawK(ax.sharp, cx.corners);
+    const sustained = cx.loops <= 1 && cx.corners <= 2 && ax.tex < 0.3 && cx.moraCount >= 2;
+    const seg = segmentStroke(stroke);
+    if (seg.loopCount >= 2) {
+      const event = generateFromUnits(seg.units, rect.width, rect.height, ax, kDraw);
+      playAndRemember(event, ax, true, "draw");
+    } else {
+      generateAndPlay(ax, 0, true, "draw",
+                      { moraCountOverride: cx.moraCount, kiki: kDraw,
+                        sustained, lengthHint: cx.moraCount });
+    }
   }
   ev.preventDefault();
 });
@@ -1229,7 +1598,7 @@ document.getElementById("btn-play").addEventListener("click", () => {
   }
   generateAndPlay(readSliders());
 });
-["size","sharp","tex","bright"].forEach(id => {
+["size","sharp","tex","bright","round","open"].forEach(id => {
   document.getElementById("ax-" + id).addEventListener("input", () => {
     const ax = readSliders();
     lastAxes = ax;
