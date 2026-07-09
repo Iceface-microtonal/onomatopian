@@ -1666,9 +1666,14 @@ function segmentWord(word) {
   const sub = (a, len) => (a >= 0 && a + len <= s.length) ? s.slice(a, a + len).join("") : null;
   const moras = [];
   let i = 0, pendingQ = false;
+  const geminable = new Set(["k","g","s","z","t","d","h","f","p","b","m","y","r","w","c","j"]);
   while (i < s.length) {
     const c = s[i];
     if (c === "q") { pendingQ = true; i += 1; continue; }
+    // 通常ローマ字の促音 (2026-07-09): 子音字の重ね = っ (kutta/kappa/maccha)。nn は撥音なので除外。
+    if (i + 1 < s.length && c === s[i + 1] && geminable.has(c)) { pendingQ = true; i += 1; continue; }
+    // ヘボン式の っち = tch (matcha): t + ch → 促音 + ち。
+    if (c === "t" && i + 2 < s.length && s[i + 1] === "c" && s[i + 2] === "h") { pendingQ = true; i += 1; continue; }
     if (c === "n") {
       const nextV = i + 1 < s.length && vowels.has(s[i + 1]);
       const isNy = i + 2 < s.length && s[i + 1] === "y" && vowels.has(s[i + 2]);
