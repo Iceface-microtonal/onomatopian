@@ -122,6 +122,10 @@
     </span>
     <div class="result-meta" id="result-meta"></div>
   </div>
+  <div id="why-panel" style="display:none; margin-top:6px;">
+    <div id="why-title" style="font-size:10px; font-weight:800; color:var(--pink); letter-spacing:0.5px;">なぜ?</div>
+    <div id="why-lines" style="font-size:10px; color:#888; line-height:1.55;"></div>
+  </div>
 </div>
 
 <!-- Tuning -->
@@ -1596,6 +1600,82 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 });
 
+// ─── なぜ? (Onomatopoeia.explain の移植・日英) — 測って見せる説明 ───
+function explainEvent(ax, moras) {
+  const voiced = moras.filter(m => !m.isSilentRest);
+  if (!voiced.length) return [];
+  const ja = uiLang === "ja";
+  const f = v => (v >= 0 ? "+" : "") + v.toFixed(2);
+  const onsets = voiced.map(m => m.onset).filter(c => c);
+  const lines = [];
+  // 子音の性格 ← sharpness
+  if (ax.sharp > 0.25) lines.push(ja ? `鋭さ ${f(ax.sharp)}（尖り）→ 鋭い子音（か・た・さ・つ系）`
+                                     : `sharp ${f(ax.sharp)} (spiky) → hard consonants (k/t/s/ts)`);
+  else if (ax.sharp < -0.25) lines.push(ja ? `鋭さ ${f(ax.sharp)}（丸み）→ 柔らかい子音（ま・わ・な・ら系）`
+                                           : `sharp ${f(ax.sharp)} (rounded) → soft consonants (m/w/n/r)`);
+  // 母音 ← 口の形
+  const vr = [];
+  if ((ax.open ?? 0) > 0.3) vr.push(ja ? "開いた口→あ/え" : "open mouth→a/e");
+  else if ((ax.open ?? 0) < -0.3) vr.push(ja ? "閉じた口→い/う" : "closed mouth→i/u");
+  if ((ax.round ?? 0) > 0.25) vr.push(ja ? "すぼめ→う/お" : "pursed lips→u/o");
+  else if ((ax.round ?? 0) < -0.25) vr.push(ja ? "横引き→い/え" : "spread lips→i/e");
+  if (!vr.length && ax.size > 0.3) vr.push(ja ? "大→あ" : "big→a");
+  if (vr.length) lines.push((ja ? "口の形 → 母音 " : "mouth → vowels: ") + vr.join(ja ? "・" : ", "));
+  // 清濁 ← size (重さ)。阻害音 = 破裂/破擦/摩擦 (manner class)
+  const OBS = new Set(["p", "a", "f"]);
+  const hasVoicedObs = onsets.some(c => VOICED.has(c) && OBS.has(mannerClassOf(c)));
+  const hasVoicelessObs = onsets.some(c => !VOICED.has(c) && OBS.has(mannerClassOf(c)));
+  if (ax.size > 0.5 && hasVoicedObs)
+    lines.push(ja ? "大きい=重い → 濁音（が・ば・ざ）" : "big = heavy → voiced (g/b/z)");
+  else if (ax.size < -0.5 && hasVoicelessObs)
+    lines.push(ja ? "小さい=軽い → 清音（か・ぱ・さ）" : "small = light → voiceless (k/p/s)");
+  // 語形 (実際の末尾から型を読む)
+  lines.push((ja ? "語形: " : "form: ") + whyFormReason(ax, voiced, ja));
+  // ピッチ ← brightness / size
+  if (ax.bright > 0.3 || ax.size < -0.3)
+    lines.push(ja ? "明るい/小さい → 高めのピッチ" : "bright/small → higher pitch");
+  else if (ax.bright < -0.3 || ax.size > 0.3)
+    lines.push(ja ? "暗い/大きい → 低めのピッチ" : "dark/big → lower pitch");
+  return lines;
+}
+function whyFormReason(ax, moras, ja) {
+  const f = v => (v >= 0 ? "+" : "") + v.toFixed(2);
+  const loops = moras.filter(m => !m.isN);
+  if (loops.length >= 2 && loops.slice(1).every(m => m.onset === null && m.nucleus === loops[0].nucleus))
+    return ja ? "一筆の連続（口を保持）→ 長音を伸ばす（あーーー型）"
+              : "one held stroke → sustained vowel (aaaa-type)";
+  if (loops.length >= 2 && loops.length % 2 === 0) {
+    const h = loops.length / 2;
+    const key = m => (m.onset ?? "_") + m.nucleus;
+    if (loops.slice(0, h).map(key).join() === loops.slice(h).map(key).join())
+      return ja ? `反復（texture ${f(ax.tex)}）→ 畳語ABAB（きらきら型）`
+                : `repetition (texture ${f(ax.tex)}) → reduplication ABAB (kira-kira type)`;
+  }
+  const last = moras[moras.length - 1];
+  if (last) {
+    if (last.isQ) return ja ? "鋭く単発（鋭さ高・反復低）→ 促音っ（ぱっ型）"
+                            : "sharp one-shot → geminate Q (paQ-type)";
+    if (last.isN) return ja ? "重・鋭・単発の衝撃 → 撥音ん（どん型）"
+                            : "heavy sharp impact → moraic N (doN-type)";
+    if (last.onset === null && moras.length >= 2 && last.nucleus === moras[moras.length - 2].nucleus)
+      return ja ? `大きい（size ${f(ax.size)}）→ 長音ー（がーん型）`
+                : `big (size ${f(ax.size)}) → long vowel (gaan-type)`;
+    if (last.onset === "r" && last.nucleus === "i")
+      return ja ? "小・柔・単発 → り（きらり型）" : "small soft one-shot → -ri (kirari-type)";
+  }
+  return ja ? "素の語根" : "plain root";
+}
+function updateWhy(ax, moras) {
+  const panel = document.getElementById("why-panel");
+  if (!panel) return;
+  const lines = explainEvent(ax, moras);
+  if (!lines.length) { panel.style.display = "none"; return; }
+  document.getElementById("why-title").textContent = uiLang === "ja" ? "なぜ?" : "why?";
+  const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  document.getElementById("why-lines").innerHTML = lines.map(l => "· " + esc(l)).join("<br>");
+  panel.style.display = "";
+}
+
 // event を「最後の発声」として記憶しつつ表示・再生する。
 // src は発声の出どころ (draw/tune/preset/romaji/log) — フィードバック集計の文脈情報。
 function playAndRemember(event, axesUsed, log, src = "tune") {
@@ -1620,6 +1700,7 @@ function playAndRemember(event, axesUsed, log, src = "tune") {
   const reasonEl = document.getElementById("fb-reason");
   if (reasonEl) reasonEl.value = "";   // 新しい発話 → 理由欄をリセット
   showResult(event);
+  updateWhy(axesUsed, event.moras);   // なぜ? (native の explain と同じ「測って見せる」説明)
   playEvent(event);
   if (log) appendLog(event);
 }
