@@ -122,6 +122,7 @@
     </span>
     <div class="result-meta" id="result-meta"></div>
   </div>
+  <div class="chips" id="fb-tags" style="display:none; margin-top:4px;"></div>
   <div id="why-panel" style="display:none; margin-top:6px;">
     <div id="why-title" style="font-size:10px; font-weight:800; color:var(--pink); letter-spacing:0.5px;">なぜ?</div>
     <div id="why-lines" style="font-size:10px; color:#888; line-height:1.55;"></div>
@@ -148,23 +149,8 @@
   </div>
   <div class="chips" id="preset-chips"></div>
   <div class="knob-row" style="margin-top:10px;">
-    <span class="knob">bpm <input type="range" id="kn-bpm" min="40" max="240" step="1" value="140"><span id="val-bpm">140</span></span>
     <span class="knob">hand corr <input type="range" id="kn-hc" min="0" max="1.5" step="0.05" value="0.5"><span id="val-hc">0.50</span></span>
-    <span class="knob" title="粗い筆: ペンを固定ステップの珠に量子化 (見えている珠と角がそのまま判定に読まれる)。手ブレはインクにならず、同じ形は同じ語に収束する"><label><input type="checkbox" id="kn-coarse" checked> <span id="t-coarse">粗い筆</span></label></span>
   </div>
-</div>
-
-<!-- Romaji direct input -->
-<div class="panel">
-  <div class="row" style="margin-bottom:6px;">
-    <span class="panel-title" id="t-romaji-title">ROMAJI 直接入力</span>
-    <span class="hint" style="margin-left:auto;" id="t-romaji-hint">空白区切り。促音=Q, 撥音=N (例 do N), 拗音=kya 等</span>
-  </div>
-  <div class="row">
-    <input id="romaji-input" type="text" value="bo u ba" autocapitalize="off" autocomplete="off" spellcheck="false">
-    <button id="btn-romaji" class="primary">▶ PLAY</button>
-  </div>
-  <div class="chips" id="romaji-chips"></div>
 </div>
 
 <!-- Feedback (👍👎 の収集と書き出し) -->
@@ -251,7 +237,6 @@ const T = uiLang === "ja" ? {
   fbCopied: "COPIED!",
   fbSaved: (n) => `✓ 記録しました（計${n}件）`,
   fbReasonPH: "理由 (任意): どこがイメージ通り/違う?",
-  coarse: "粗い筆",
   start: "▶ タップして開始 (音を有効化)",
 } : {
   eraser: "Eraser",
@@ -265,20 +250,15 @@ const T = uiLang === "ja" ? {
   fbCopied: "COPIED!",
   fbSaved: (n) => `✓ saved (${n} total)`,
   fbReasonPH: "why? (optional): what matched / didn't",
-  coarse: "coarse ink",
   start: "▶ Tap to Start (enable sound)",
 };
 function applyLangTexts() {
   document.getElementById("t-eraser").textContent = T.eraser;
   document.getElementById("t-about").textContent = T.about;
-  document.getElementById("t-romaji-title").textContent = T.romajiTitle;
-  document.getElementById("t-romaji-hint").textContent = T.romajiHint;
   document.getElementById("t-fb-hint").textContent = T.fbHint;
   document.getElementById("loading-note").textContent = T.loadingInitial;
   const reasonEl = document.getElementById("fb-reason");
   if (reasonEl) reasonEl.placeholder = T.fbReasonPH;
-  const coarseLabel = document.getElementById("t-coarse");
-  if (coarseLabel) coarseLabel.textContent = T.coarse;
 }
 
 // ─── 音素 inventory (PhonosymbolicEvent.swift と対応) ───
@@ -1464,7 +1444,7 @@ function scheduleOne(ctx, buf, start, dur, amplitude, bufferOffsetSec = 0, loop 
 }
 function scheduleEvent(ctx, event) {
   stopAll();
-  const bpm = Number(document.getElementById("kn-bpm").value);
+  const bpm = 120;   // 2026-07-11: BPM ノブ廃止・120 固定 (発話テンポの個体差をデータから排除)
   const moraSec = 30.0 / bpm;             // 30000/BPM ms
   const moras = event.moras;
   const plan = analyzeMoras(moras);
@@ -1525,7 +1505,8 @@ function axesEqual(a, b) {
 // FEEDBACK_ENDPOINT に URL を設定すると、投票を 1 件ずつ POST 送信もする
 // (Google Apps Script 等で公開ユーザーから収集したい場合用。空なら何もしない)。
 const FEEDBACK_ENDPOINT = "";
-const FB_VERSION = 3;          // v3: reason (理由の自由記述・任意) を追加
+const FB_VERSION = 4;          // v4: 口の2軸/描線頂点列/K・角・語形タグ/エンジン版を追加 (v3: reason)
+const ENGINE_VERSION = "v11";  // 生成ロジックの版 (バケットや manner の変更をまたぐ集計用)
 let feedbackLog = [];
 try { feedbackLog = JSON.parse(localStorage.getItem("onomatoi.feedback") || "[]"); } catch (e) {}
 let utteranceSeq = 0;
@@ -1550,14 +1531,19 @@ function vote(verdict) {
   const idx = feedbackLog.findIndex(r => r.id === u.id);
   const reasonEl = document.getElementById("fb-reason");
   const rec = {
-    v: FB_VERSION, id: u.id, t: new Date().toISOString(), lang: uiLang,
+    v: FB_VERSION, id: u.id, t: new Date().toISOString(), lang: uiLang, eng: u.eng,
     src: u.src, word: u.word, mora: u.mora, redup: u.redup,
-    axes: u.axes, vote: verdict,
+    axes: u.axes, moras: u.moras, vote: verdict,
     reason: reasonEl ? reasonEl.value.trim().slice(0, 200) : "",
+    tags: [...activeFbTags],
   };
+  if (u.k !== undefined) { rec.k = u.k; rec.cor = u.cor; rec.cs = u.cs; rec.lp = u.lp; }
+  if (u.stroke) rec.stroke = u.stroke;
   if (idx >= 0) feedbackLog[idx] = rec; else feedbackLog.push(rec);
   saveFeedback();
   setVoteButtons(true, verdict);
+  const tagBox = document.getElementById("fb-tags");
+  if (tagBox) { tagBox.style.display = ""; renderFbTags(); }
   // 記録確認: ボタン横に「✓ 記録しました（計N件）」を一瞬表示
   const vm = document.getElementById("vote-msg");
   if (vm) {
@@ -1572,6 +1558,44 @@ function vote(verdict) {
         headers: { "Content-Type": "text/plain" }, body: JSON.stringify(rec) });
     } catch (e) {}
   }
+}
+
+// ─── 構造化タグ (2026-07-11, v4): 投票後に「どう違うか」の方向をワンタップで残せる ───
+// 自由記述より遥かに集計しやすい誤差方向シグナル。key は言語非依存で保存。
+const FB_TAG_DEFS = [
+  ["harder",    "もっと硬い感じ",   "should be harder"],
+  ["softer",    "もっと柔らかい感じ", "should be softer"],
+  ["tooLong",   "長すぎ",          "too long"],
+  ["tooShort",  "短すぎ",          "too short"],
+  ["vowel",     "母音が違う",       "wrong vowel"],
+  ["consonant", "子音が違う",       "wrong consonant"],
+  ["rhythm",    "リズムが違う",     "wrong rhythm"],
+];
+let activeFbTags = new Set();
+function renderFbTags() {
+  const box = document.getElementById("fb-tags");
+  if (!box) return;
+  box.innerHTML = "";
+  for (const [key, ja, en] of FB_TAG_DEFS) {
+    const b = document.createElement("button");
+    b.textContent = uiLang === "ja" ? ja : en;
+    b.classList.toggle("sel", activeFbTags.has(key));
+    b.style.cssText = activeFbTags.has(key)
+      ? "background:var(--pink); color:#fff; border-color:var(--pink);" : "";
+    b.addEventListener("click", () => {
+      if (activeFbTags.has(key)) activeFbTags.delete(key); else activeFbTags.add(key);
+      renderFbTags();
+      syncTagsToVote();
+    });
+    box.appendChild(b);
+  }
+}
+function syncTagsToVote() {
+  if (!currentUtterance) return;
+  const idx = feedbackLog.findIndex(r => r.id === currentUtterance.id);
+  if (idx < 0) return;
+  feedbackLog[idx].tags = [...activeFbTags];
+  saveFeedback();
 }
 
 // 理由の後書き: 投票済みの発話に理由を書き足したら、そのレコードへ反映する。
@@ -1678,27 +1702,37 @@ function updateWhy(ax, moras) {
 
 // event を「最後の発声」として記憶しつつ表示・再生する。
 // src は発声の出どころ (draw/tune/preset/romaji/log) — フィードバック集計の文脈情報。
-function playAndRemember(event, axesUsed, log, src = "tune") {
+function playAndRemember(event, axesUsed, log, src = "tune", extra = {}) {
   lastEvent = event;
   lastEventAxes = { ...axesUsed };
   // 投票対象を更新 (再生のたびに新しい発話 ID。PLAY リピートでは更新しない)
   utteranceSeq += 1;
+  const r3 = v => Math.round((v ?? 0) * 1000) / 1000;
   currentUtterance = {
     id: Date.now().toString(36) + "-" + utteranceSeq,
     src,
+    eng: ENGINE_VERSION,
     word: romajiOf(event),
     mora: event.moras.filter(m => !m.isSilentRest).length,
     redup: !!event.isRedup,
-    axes: {
-      s: Math.round(axesUsed.size * 1000) / 1000,
-      sh: Math.round(axesUsed.sharp * 1000) / 1000,
-      t: Math.round(axesUsed.tex * 1000) / 1000,
-      b: Math.round(axesUsed.bright * 1000) / 1000,
-    },
+    // v4: 口の2軸 (round/open) を含む全6軸 — 口モデルの投票相関がとれる
+    axes: { s: r3(axesUsed.size), sh: r3(axesUsed.sharp), t: r3(axesUsed.tex),
+            b: r3(axesUsed.bright), r: r3(axesUsed.round), o: r3(axesUsed.open) },
+    // v4: モーラ列の実体 (romaji 文字列より曖昧性なく音素相関がとれる)
+    moras: event.moras.filter(m => !m.isSilentRest)
+      .map(m => (m.isN ? "N" : m.isQ ? "Q" : (m.onset ?? "") + m.nucleus)),
+    // v4: 判定に使われた導出量 (K・角・鋭さ・ループ) — kiki/manner のデータ駆動調整用
+    ...(extra.k !== undefined ? { k: r3(extra.k), cor: extra.corners ?? 0,
+                                  cs: r3(extra.cs), lp: extra.loops ?? 0 } : {}),
+    // v4: 描いた線の頂点列 (粗い筆の珠・正規化・≤48点) — 将来のエンジンで再抽出できる生データ
+    ...(extra.stroke ? { stroke: extra.stroke } : {}),
   };
   setVoteButtons(true, null);
   const reasonEl = document.getElementById("fb-reason");
   if (reasonEl) reasonEl.value = "";   // 新しい発話 → 理由欄をリセット
+  activeFbTags = new Set();            // タグもリセット (次の投票まで隠す)
+  const tagBox = document.getElementById("fb-tags");
+  if (tagBox) tagBox.style.display = "none";
   showResult(event);
   updateWhy(axesUsed, event.moras);   // なぜ? (native の explain と同じ「測って見せる」説明)
   playEvent(event);
@@ -1793,7 +1827,7 @@ function renderLog() {
 }
 
 // 生成 + 再生 + ログ (決定的 seed)
-function generateAndPlay(axes, salt = 0, log = true, src = "tune", opts = {}) {
+function generateAndPlay(axes, salt = 0, log = true, src = "tune", opts = {}, extra = {}) {
   let event;
   if (opts.kiki != null) {
     // 語レベル K 整合ゲート: 語の K が描画の K とズレたら salt を変えて再試行 (最大3案・決定的)
@@ -1810,7 +1844,7 @@ function generateAndPlay(axes, salt = 0, log = true, src = "tune", opts = {}) {
     const rand = mulberry32(axesSeed(axes, salt));
     event = generate(axes, rand, 0.4, opts);
   }
-  playAndRemember(event, axes, log, src);
+  playAndRemember(event, axes, log, src, extra);
   return event;
 }
 
@@ -1891,10 +1925,7 @@ function redraw() {
     cctx.stroke();
   }
 }
-function coarseInkOn() {
-  const el = document.getElementById("kn-coarse");
-  return el ? el.checked : true;
-}
+function coarseInkOn() { return true; }   // 2026-07-11: 粗い筆のみ (トグル廃止・データの均質化)
 let pendingPt = null;
 function pointerPos(ev) {
   const rect = canvas.getBoundingClientRect();
@@ -1961,13 +1992,19 @@ canvas.addEventListener("pointerup", ev => {
     const sustained = cx.loops <= 1 && cx.corners <= 2 && cx.cornerSharpness < 0.35
       && ax.tex < 0.3 && cx.moraCount >= 2;
     const seg = segmentStroke(inkPts);
+    // v4 フィードバック用の発話コンテキスト: 判定に使った導出量 + 描いた珠の頂点列 (正規化・≤48点)。
+    const r3 = v => Math.round(v * 1000) / 1000;
+    const beads = (coarse ? stroke : inkPts).slice(0, 48)
+      .map(p => [r3(p.x / rect.width), r3(p.y / rect.height)]);
+    const extra = { k: kDraw, corners: cx.corners, cs: cx.cornerSharpness,
+                    loops: cx.loops, stroke: beads };
     if (unitEligible(seg)) {
       const event = generateFromUnits(seg.units, rect.width, rect.height, ax, kDraw, 0.4, mDraw);
-      playAndRemember(event, ax, true, "draw");
+      playAndRemember(event, ax, true, "draw", extra);
     } else {
       generateAndPlay(ax, 0, true, "draw",
                       { moraCountOverride: cx.moraCount, kiki: kDraw, manner: mDraw,
-                        sustained, lengthHint: cx.moraCount });
+                        sustained, lengthHint: cx.moraCount }, extra);
     }
   }
   ev.preventDefault();
@@ -1995,9 +2032,6 @@ document.getElementById("btn-play").addEventListener("click", () => {
   });
 });
 drawMouthIcon(0, 0);   // 初期表示 (中立の口)
-document.getElementById("kn-bpm").addEventListener("input", e => {
-  document.getElementById("val-bpm").textContent = e.target.value;
-});
 document.getElementById("kn-hc").addEventListener("input", e => {
   document.getElementById("val-hc").textContent = Number(e.target.value).toFixed(2);
 });
@@ -2087,51 +2121,6 @@ function segmentWord(word) {
   }
   return moras;
 }
-function playRomaji() {
-  ensureCtx();
-  const tokens = document.getElementById("romaji-input").value
-    .trim().toLowerCase().split(/[\s\-_]+/).filter(Boolean);
-  const moras = [];
-  let pendingQ = false;
-  for (const tk of tokens) {
-    if (tk === "q") { pendingQ = true; continue; }
-    if (tk === "n" || tk === "nn") {
-      moras.push({ onset: null, nucleus: "a", durationMs: 160,
-                   gapMs: pendingQ ? 70 : 0, amplitude: 1, isN: true, isQ: false });
-      pendingQ = false; continue;
-    }
-    const m = parseMora(tk, pendingQ);
-    if (m) { moras.push(m); pendingQ = false; continue; }
-    // 単一モーラとして解釈できない (2文字超の塊、例 "bouba"/"kirakira") →
-    // greedy CV 自動分割にフォールバック。space 区切りでなくても語が鳴るように。
-    const seg = segmentWord(tk);
-    if (seg.length > 0) {
-      if (pendingQ) seg[0] = { ...seg[0], gapMs: geminateGapMs(seg[0].onset) };
-      moras.push(...seg);
-    }
-    pendingQ = false;
-  }
-  if (moras.length === 0) return;
-  const ev = { axes: lastAxes, moras, baseF0: 200, isRedup: false };
-  playAndRemember(ev, lastAxes, false, "romaji");   // PLAY で同じ入力をリピート可能に
-}
-document.getElementById("btn-romaji").addEventListener("click", playRomaji);
-document.getElementById("romaji-input").addEventListener("keydown", e => {
-  if (e.key === "Enter") playRomaji();
-});
-const romajiQuick = ["bo u ba", "ki ki", "a i u e o", "ka Q ka", "do n",
-                     "kya kyo", "cha pu cha pu", "shi n"];
-const rchips = document.getElementById("romaji-chips");
-for (const q of romajiQuick) {
-  const b = document.createElement("button");
-  b.textContent = q;
-  b.addEventListener("click", () => {
-    document.getElementById("romaji-input").value = q;
-    playRomaji();
-  });
-  rchips.appendChild(b);
-}
-
 // CLEAR (sketch + sliders リセット、log は保持 — iPad 版と同じ)
 document.getElementById("btn-clear").addEventListener("click", () => {
   stopAll();
