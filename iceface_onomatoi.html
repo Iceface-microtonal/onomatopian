@@ -183,6 +183,17 @@
  *  - warabe (旋律) モードなし / COMPOSE モードなし
  *  - 促音は無音 gap のみ (V-Q / 摩擦延長サンプル不使用)
  * 生成ロジック (bias 表 v0.4 / nil-onset / ch 制限 / 決定的 seed) は本体と同一。
+ * v9 追加移植 (2026-07-10, 最新 OnomatoiCore 同期):
+ *  - 角の鋭さ cornerSharpness (ピークホールド+継ぎ目救済+閉じ目ヘアピン除外): 三角>四角>円
+ *    の連続化。drawK は鋭さ主導 (密度は±30%変調)
+ *  - 閉合度 v2: 端点ギャップ周長比 ≤10% は閉扱い (閉じたつもりの四角が口を失わない) +
+ *    openness オフセット −0.57 再キャリブレーション
+ *  - 単位ごとの K/manner: ループ=音節 の各ループが自分の形から K と調音方法を持つ
+ *  - 単発くるん (線→一回転→また線) を単位語として読む (unitEligible)
+ *  - manner 次元: 描線の動態 (単発衝撃/角の連打/波/閉じた丸) → 子音の調音方法
+ *    (破裂/破擦/摩擦/共鳴) の親和 (+0.8×affinity)。K が潰していた時間構造の対応
+ *  - 丸ん (ぽよん型): 小さく閉じた丸・柔・単発 → 語末ん
+ *  - sustained (口の保持) ゲートに cornerSharpness<0.35 の保険 (三角の長音誤爆防止)
  * v8 追加移植 (2026-07-09, 最新 OnomatoiCore 同期):
  *  - 口の形 (openness×roundness): 描いた形を口として読む (PCA 回転不変)。丸=あ/横棒=い/
  *    小円=う/横長楕円=え/縦長=お。母音は口が支配 (brightness は母音判定から撤去)
@@ -340,9 +351,33 @@ const K_CONS = { ts:0.90, k:0.85, ch:0.85, t:0.80, ky:0.80, p:0.60, s:0.60, sh:0
                  r:-0.35, ny:-0.50, n:-0.60, y:-0.60, m:-0.75, w:-0.80 };
 const K_VOWEL = { i:0.55, e:0.15, a:-0.05, o:-0.35, u:-0.45 };
 function consonantK(c) { return c === null ? -0.50 : (K_CONS[c] ?? 0); }
-function drawK(sharp, corners) {
-  const ct = 2 * Math.min(1, corners / 6) - 1;
+function drawK(sharp, corners, cornerSharpness = null) {
+  // cornerSharpness (2026-07-10): 角の**鋭さ**主導 (三角60°>四角90°>円)。密度は±30%変調のみ —
+  // 密度主導だと「鈍いが角だらけ」(六角形) が「鋭いが角少なめ」(四角) に勝ってしまう (native 実測)。
+  let ct;
+  if (cornerSharpness !== null && corners > 0) {
+    const density = Math.min(1, corners / 6);
+    ct = 2 * cornerSharpness * (0.7 + 0.3 * density) - 1;
+  } else {
+    ct = 2 * Math.min(1, corners / 6) - 1;
+  }
   return Math.max(-1, Math.min(1, 0.70 * sharp + 0.30 * ct));
+}
+// ─── MannerClass (調音方法の層, 2026-07-10): 運動の時間構造 ↔ 調音の時間構造 ───
+//   破裂=閉鎖→瞬間開放=単発の衝撃 / 破擦=閉鎖+摩擦=角の連打 / 摩擦=連続乱流=波 / 共鳴=閉じた丸
+const MANNER_CLASS = { k:"p", g:"p", t:"p", d:"p", p:"p", b:"p", ky:"p", gy:"p",
+                       ts:"a", ch:"a", j:"a",
+                       s:"f", sh:"f", z:"f", h:"f", f:"f",
+                       m:"s", n:"s", ny:"s", r:"s", w:"s", y:"s" };
+const MANNER_WEIGHT = 0.8;
+function mannerClassOf(c) { return c === null ? "s" : (MANNER_CLASS[c] ?? "s"); }
+function mannerProfile(sharp, corners, cornerSharpness, tex, loops) {
+  const cs = Math.max(0, Math.min(1, cornerSharpness));
+  const impact = cs * Math.max(0, 1 - Math.max(0, corners - 2) / 5);   // 単発鋭角 (≤3個)
+  const jagged = cs * Math.max(0, Math.min(1, (corners - 3) / 5));     // 角の連打 (4個〜)
+  const wavy = Math.max(0, tex) * (1 - cs);                            // うねり×角なし
+  const round = Math.max(loops >= 1 ? 0.7 : 0, Math.max(0, -sharp));   // 閉じた丸/柔
+  return { p: impact, a: jagged, f: wavy, s: round };
 }
 function wordK(moras) {
   let sum = 0, count = 0, hasGem = false, hasLong = false, prevV = null;
@@ -387,7 +422,7 @@ function softmaxSample(scores, temperature, rand) {
   }
   return exps[exps.length - 1][0];
 }
-function pickConsonant(target, prevOnset, temperature, rand, kiki = null) {
+function pickConsonant(target, prevOnset, temperature, rand, kiki = null, manner = null) {
   const scores = [];
   // nil-onset 候補: burst の要否は kiki (あれば) で判断
   const sharpLike = kiki ?? target.sharp;
@@ -395,11 +430,15 @@ function pickConsonant(target, prevOnset, temperature, rand, kiki = null) {
                - NIL_SHARP_PENALTY * Math.max(0, sharpLike)
                + NIL_DULL_BONUS * Math.max(0, -sharpLike);
   if (prevOnset === null) nilScore -= 0.4;     // 連続 V 抑制
+  // manner 項: nil onset = 開いた共鳴。全候補に同じ規律 → profile 平坦なら softmax 加法不変で無効果。
+  if (manner !== null) nilScore += MANNER_WEIGHT * manner.s;
   scores.push([null, nilScore]);
   for (const c of CONSONANTS) {
     let s = (kiki !== null)
       ? scoreConsonantKiki(target, kiki, c, CONSONANT_BIAS[c])
       : scoreAgainst(target, CONSONANT_BIAS[c]);
+    // 調音方法の親和 (2026-07-10 manner 次元): 描線の動態 ↔ 破裂/破擦/摩擦/共鳴。
+    if (manner !== null) s += MANNER_WEIGHT * (manner[mannerClassOf(c)] ?? 0);
     if (prevOnset === c) s -= 0.3;             // 同子音連続ペナルティ
     scores.push([c, s]);
   }
@@ -529,6 +568,8 @@ function chooseTemplate(rootLen, axes, inputHasN, inputHasLong, inputRedup, inpu
   const impact = 0.5 * axes.size + 0.35 * sharpLike - 0.3 * axes.tex;
   if (impact > 0.45) return (rootLen >= 2 && axes.size > 0.45) ? "longVowelN" : "moraicN";
   if (rootLen >= 2 && sharpLike < -0.25 && axes.tex > -0.2) return "reduplicated";
+  // 丸ん (2026-07-10): 丸く (円唇 round>0.2 = 小さく閉じた丸)・柔・単発 → 語末ん (ぽよん/ぷるん型)。
+  if (sharpLike < -0.15 && axes.tex < 0.15 && (axes.round || 0) > 0.2) return "moraicN";
   if (sharpLike > 0.4 && axes.tex < 0.15) return "geminate";
   if (sharpLike > 0.25) return "moraicN";
   if (axes.bright > 0.3 && axes.tex < 0.25) return "diphFinal";
@@ -630,7 +671,8 @@ function legalize(moras, axes, lengthHint = null, sustained = false, kiki = null
 }
 
 function generate(axes, rand, temperature = 0.4, opts = {}) {
-  const { moraCountOverride = null, kiki = null, sustained = false, lengthHint = null } = opts;
+  const { moraCountOverride = null, kiki = null, sustained = false, lengthHint = null,
+          manner = null } = opts;
   let moraCount;
   if (moraCountOverride !== null) {
     moraCount = Math.max(1, Math.min(16, moraCountOverride));
@@ -653,7 +695,7 @@ function generate(axes, rand, temperature = 0.4, opts = {}) {
   const unique = [];
   let prevOnset = undefined, firstVowel = null;
   for (let i = 0; i < uniqueCount; i++) {
-    const onset = pickConsonant(axes, prevOnset === undefined ? "" : prevOnset, temperature, rand, kiki);
+    const onset = pickConsonant(axes, prevOnset === undefined ? "" : prevOnset, temperature, rand, kiki, manner);
     let restrict = null;
     if (onset && (PALATALIZED.has(onset) || SEMIVOWEL.has(onset))) restrict = new Set(["a","u","o"]);
     // ch は cha/chi/chu/cho/che 全て収録済 (2026-06 に che 追加) → 全母音可。
@@ -804,17 +846,22 @@ function extractAxes(points, w, h) {
   area = Math.abs(area) / 2;
   const closingGap = Math.hypot(points[0].x - points[points.length-1].x,
                                 points[0].y - points[points.length-1].y);
-  const closedness = 1 - Math.min(1, closingGap / Math.max(bboxDiag * 0.5, 1));
-  const fill = Math.min(1, area / Math.max(1e-6, 8 * Math.sqrt(lam1 * lam2)));
-  const sizeN = Math.min(1, (bboxDiag / canvasDiag) / 0.45);
-  const verticalFactor = 1 - 0.5 * Math.max(0, spreadRaw);
-  const open = clamp(2 * closedness * fill * sizeN * verticalFactor - 0.55);
-
-  // 円唇 (round): 横長→横引き(−)、小さく閉じた丸→すぼめ(+, smoothstep ゲート)。
   const smoothstep = (e0, e1, x) => {
     const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
     return t * t * (3 - 2 * t);
   };
+  // 閉合度 v2 (2026-07-10): 人間の「閉じたつもり」は数%の隙間を含む — 周長比 ≤10% は完全に
+  // 閉扱い、30% で開扱いへ smoothstep 移行 (旧: bboxDiag·0.5 比の線形は周長8%のギャップで
+  // 四角の「開いた口」を失っていた)。
+  const gapRatio = closingGap / Math.max(pathLen, 1);
+  const closedness = smoothstep(0.30, 0.10, gapRatio);
+  const fill = Math.min(1, area / Math.max(1e-6, 8 * Math.sqrt(lam1 * lam2)));
+  const sizeN = Math.min(1, (bboxDiag / canvasDiag) / 0.45);
+  const verticalFactor = 1 - 0.5 * Math.max(0, spreadRaw);
+  // オフセット −0.55→−0.57: 閉合度 v2 が完全閉で 1.0 を返す分の再キャリブレーション (native 同一)。
+  const open = clamp(2 * closedness * fill * sizeN * verticalFactor - 0.57);
+
+  // 円唇 (round): 横長→横引き(−)、小さく閉じた丸→すぼめ(+, smoothstep ゲート)。
   const closedGate = smoothstep(0.45, 0.75, closedness);
   const smallGate = smoothstep(0.10, -0.40, open);
   const roundShapeGate = Math.max(0, 1 - Math.abs(spreadRaw) / 0.5);
@@ -836,7 +883,7 @@ function applyHandCorrection(ax, level) {
 // ─── strokeComplexity (AxisExtractor.swift v3 の移植: 角+ループ+大きさ → モーラ数) ───
 function strokeComplexity(points, w, h, maxMora = 16) {
   if (points.length < 2 || w <= 0 || h <= 0)
-    return { corners: 0, loops: 0, moraCount: 1 };
+    return { corners: 0, loops: 0, moraCount: 1, cornerSharpness: 0 };
   let minX = points[0].x, maxX = points[0].x, minY = points[0].y, maxY = points[0].y;
   for (const p of points) {
     minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
@@ -849,18 +896,61 @@ function strokeComplexity(points, w, h, maxMora = 16) {
     pathLen += Math.hypot(points[i].x - points[i-1].x, points[i].y - points[i-1].y);
   const sizeRatio = bboxDiag / Math.max(canvasDiag, 1);
   if (sizeRatio < 0.05 && pathLen < canvasDiag * 0.08)
-    return { corners: 0, loops: 0, moraCount: 1 };
-  // 角: 窓つき方向変化 (cornerSensitivity 0.77 → 閾値 0.83rad ≈ 47°)、近接は 1 つに
+    return { corners: 0, loops: 0, moraCount: 1, cornerSharpness: 0 };
+  // 角 v2 (2026-07-10): 検出は従来 (閾値 0.83rad・近接抑制) + **ピークホールド** (肩でなく
+  // 抑制窓内の折返し最大を鋭さに) + **継ぎ目救済** (閉ストロークの描き始め=頂点の欠損を
+  // cyclic 窓で回収・頂点上限150°=閉じ目ヘアピン除外) + 閉じ目 >150° は鋭さ平均から除外。
   const k = Math.max(1, Math.min(Math.floor(points.length / 24), 8));
-  let corners = 0, lastCorner = -1000;
-  for (let i = k; i < points.length - k; i++) {
-    const v1x = points[i].x - points[i-k].x, v1y = points[i].y - points[i-k].y;
-    const v2x = points[i+k].x - points[i].x, v2y = points[i+k].y - points[i].y;
+  const n = points.length;
+  const CORNER_THRESH = 0.83, VERTEX_CAP = 2.62;
+  const closingGap = Math.hypot(points[0].x - points[n-1].x, points[0].y - points[n-1].y);
+  const isClosed = closingGap <= pathLen * 0.12;
+  const turnAt = (i, wrap) => {
+    const im = wrap ? ((i - k) % n + n) % n : i - k;
+    const ip = wrap ? (i + k) % n : i + k;
+    const v1x = points[i].x - points[im].x, v1y = points[i].y - points[im].y;
+    const v2x = points[ip].x - points[i].x, v2y = points[ip].y - points[i].y;
     const l1 = Math.hypot(v1x, v1y), l2 = Math.hypot(v2x, v2y);
-    if (l1 < 1e-6 || l2 < 1e-6) continue;
-    const turn = Math.acos(Math.max(-1, Math.min(1, (v1x*v2x + v1y*v2y) / (l1*l2))));
-    if (turn > 0.83 && i - lastCorner >= k) { corners++; lastCorner = i; }
+    if (l1 < 1e-6 || l2 < 1e-6) return 0;
+    return Math.acos(Math.max(-1, Math.min(1, (v1x*v2x + v1y*v2y) / (l1*l2))));
+  };
+  const turnArr = new Array(n).fill(0);
+  for (let i = k; i < n - k; i++) turnArr[i] = turnAt(i, false);
+  const fired = [];
+  let lastCorner = -1000;
+  for (let i = k; i < n - k; i++) {
+    if (turnArr[i] > CORNER_THRESH && i - lastCorner >= k) {
+      lastCorner = i;
+      let peak = turnArr[i];
+      for (let j = i + 1; j < Math.min(i + k, n - k); j++) peak = Math.max(peak, turnArr[j]);
+      fired.push([i, peak]);
+    }
   }
+  if (isClosed) {
+    let seamPeak = 0, seamIdx = -1;
+    for (let off = 0; off < 2 * k; off++) {
+      const i = (n - k + off) % n;
+      const t = turnAt(i, true);
+      if (t > seamPeak) { seamPeak = t; seamIdx = i; }
+    }
+    if (seamPeak > CORNER_THRESH && seamPeak <= VERTEX_CAP && seamIdx >= 0) {
+      const firstCorner = fired.length ? fired[0][0] : -1000;
+      const distLast = seamIdx >= lastCorner ? seamIdx - lastCorner : (n - lastCorner) + seamIdx;
+      const distFirst = seamIdx <= firstCorner ? firstCorner - seamIdx : firstCorner + (n - seamIdx);
+      if ((lastCorner < 0 || distLast >= k) && (firstCorner < 0 || distFirst >= k))
+        fired.push([seamIdx, seamPeak]);
+    }
+  }
+  const corners = fired.length;
+  let csSum = 0, csCount = 0;
+  for (const [fi, peak] of fired) {
+    const nearEnds = fi < 3 * k || fi >= n - 3 * k;
+    if (isClosed && nearEnds && peak > VERTEX_CAP) continue;   // 閉じ目ヘアピンは鋭さに数えない
+    csSum += peak; csCount++;
+  }
+  const cornerSharpness = csCount > 0
+    ? Math.max(0, Math.min(1, (csSum / csCount - CORNER_THRESH) / (Math.PI - CORNER_THRESH)))
+    : 0;
   let totalTurning = 0;
   for (let i = 1; i < points.length - 1; i++) {
     const v1x = points[i].x - points[i-1].x, v1y = points[i].y - points[i-1].y;
@@ -877,7 +967,7 @@ function strokeComplexity(points, w, h, maxMora = 16) {
   const base = 1 + Math.max(0, sizeRatio - 0.5) * 2 * sizeToLength;
   const rawMora = base + comp * sizeGate;
   const moraCount = Math.max(1, Math.min(maxMora, Math.round(rawMora)));
-  return { corners, loops, moraCount };
+  return { corners, loops, moraCount, cornerSharpness };
 }
 
 // ─── StrokeSegmenter (構造単位分割: ループ=音節, つなぎ線=ー/ん/っ/直結) ───
@@ -924,6 +1014,19 @@ function segmentStroke(points) {
   });
   return { units, loopCount: units.filter(u => u.kind === "loop").length };
 }
+// 単位語の入口判定 (2026-07-10): ループ2個以上は常に単位語。単発ループは「線の中のくるん」
+// (線→一回転→また線) のときだけ — ループが内側で両側のつなぎ線が実在 (各≥全長12%)。
+// 裸の丸・端フック円は従来の口/保持経路のまま。
+function unitEligible(seg) {
+  if (seg.loopCount >= 2) return true;
+  if (seg.loopCount !== 1 || seg.units.length < 3) return false;
+  const total = seg.units.reduce((a, u) => a + u.arcLength, 0);
+  if (total <= 0) return false;
+  const li = seg.units.findIndex(u => u.kind === "loop");
+  const lead = seg.units.slice(0, li).reduce((a, u) => a + u.arcLength, 0);
+  const trail = seg.units.slice(li + 1).reduce((a, u) => a + u.arcLength, 0);
+  return lead / total >= 0.12 && trail / total >= 0.12;
+}
 function classifyConnector(u, isTrailing, w, h) {
   const canvasDiag = Math.hypot(w, h);
   const lenRatio = u.arcLength / Math.max(canvasDiag, 1);
@@ -963,7 +1066,7 @@ function polishUnits(moras, axes, kiki = null) {
   if (out.length > 16) out = out.slice(0, 16);
   return out;
 }
-function generateFromUnits(units, w, h, globalAxes, kiki = null, temperature = 0.4) {
+function generateFromUnits(units, w, h, globalAxes, kiki = null, temperature = 0.4, manner = null) {
   const step = 0.0001 + 0.7 * 0.4;   // tuning.repetition 0.7: 同じループ = 同じ音節
   const quant = ax => {
     const q = v => Math.round(v / step) * step;
@@ -976,8 +1079,18 @@ function generateFromUnits(units, w, h, globalAxes, kiki = null, temperature = 0
     units.forEach((u, idx) => {
       if (u.kind === "loop") {
         const ax = quant(extractAxes(u.points, w, h));
+        // 単位ごとの K/manner (2026-07-10): ループはそれ自体が閉じた図形 — そのループだけの
+        // 角の鋭さ/動態から K と調音方法を持つ (丸→三角→丸 = 柔→硬→柔 の子音遷移)。
+        // 大域 K は 25% だけ残す (語レベル整合ゲートは温存)。
+        const ucx = (kiki !== null || manner !== null) ? strokeComplexity(u.points, w, h) : null;
+        const kUnit = (kiki !== null && ucx)
+          ? 0.25 * kiki + 0.75 * drawK(ax.sharp, ucx.corners, ucx.cornerSharpness)
+          : kiki;
+        const mUnit = (manner !== null && ucx)
+          ? mannerProfile(ax.sharp, ucx.corners, ucx.cornerSharpness, ax.tex, 1)
+          : null;
         const rand = mulberry32(axesSeed(ax, salt));
-        const onset = pickConsonant(ax, "", temperature, rand, kiki);
+        const onset = pickConsonant(ax, "", temperature, rand, kUnit, mUnit);
         let restrict = null;
         if (onset && (PALATALIZED.has(onset) || SEMIVOWEL.has(onset))) restrict = new Set(["a","u","o"]);
         const vowel = pickVowel(ax, null, temperature, restrict, rand);
@@ -1571,15 +1684,19 @@ canvas.addEventListener("pointerup", ev => {
     // 最新 Core 適応 (2026-07-09): 複雑さ → 語長 / bouba・kiki 大域判定 / 一筆連続=長音 /
     // 構造単位 (ループ≥2 → ループ=音節・つなぎ線=ー,ん,っ,直結)。同じ描写 = 同じ語 (決定的)。
     const cx = strokeComplexity(stroke, rect.width, rect.height, 16);
-    const kDraw = drawK(ax.sharp, cx.corners);
-    const sustained = cx.loops <= 1 && cx.corners <= 2 && ax.tex < 0.3 && cx.moraCount >= 2;
+    const kDraw = drawK(ax.sharp, cx.corners, cx.cornerSharpness);
+    // manner 次元 (2026-07-10): 描線の動態 → 子音の調音方法の親和。
+    const mDraw = mannerProfile(ax.sharp, cx.corners, cx.cornerSharpness, ax.tex, cx.loops);
+    // cornerSharpness<0.35: 角が丸まって2個以下に数えられた三角の「保持=長音」誤爆を防ぐ保険。
+    const sustained = cx.loops <= 1 && cx.corners <= 2 && cx.cornerSharpness < 0.35
+      && ax.tex < 0.3 && cx.moraCount >= 2;
     const seg = segmentStroke(stroke);
-    if (seg.loopCount >= 2) {
-      const event = generateFromUnits(seg.units, rect.width, rect.height, ax, kDraw);
+    if (unitEligible(seg)) {
+      const event = generateFromUnits(seg.units, rect.width, rect.height, ax, kDraw, 0.4, mDraw);
       playAndRemember(event, ax, true, "draw");
     } else {
       generateAndPlay(ax, 0, true, "draw",
-                      { moraCountOverride: cx.moraCount, kiki: kDraw,
+                      { moraCountOverride: cx.moraCount, kiki: kDraw, manner: mDraw,
                         sustained, lengthHint: cx.moraCount });
     }
   }
