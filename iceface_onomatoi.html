@@ -918,13 +918,15 @@ function extractAxes(points, w, h) {
 
   return { size, sharp, tex, bright, round, open };
 }
-function applyHandCorrection(ax, level) {
+function applyHandCorrection(ax, level, dampenTexture = true) {
   const amt = Math.max(0, Math.min(1, level));
   // spread で全軸を保持 (adjusted 相当)。全書きは後から足された軸 (口の2軸) を落とす事故のもと。
+  // v3 (粗い筆): texture 減衰は手ブレの偽折返し補正 — 粗い筆はジッタを入力段階で捨てるので、
+  // 減衰すると本物の反復シグナルを削る。粗い筆時は dampenTexture=false で sharp 補正のみ。
   return {
     ...ax,
     sharp: Math.max(-1, Math.min(1, ax.sharp + amt * 0.6)),
-    tex: ax.tex * (1 - amt * 0.3),
+    tex: dampenTexture ? ax.tex * (1 - amt * 0.3) : ax.tex,
   };
 }
 
@@ -1827,7 +1829,7 @@ canvas.addEventListener("pointerup", ev => {
     const rect = canvas.getBoundingClientRect();
     const raw = extractAxes(inkPts, rect.width, rect.height);
     const hc = Number(document.getElementById("kn-hc").value);
-    let ax = applyHandCorrection(raw, hc);
+    let ax = applyHandCorrection(raw, hc, !coarse);
     // 粗い筆: 軸の知覚バケット (0.25) — 似た描写→同一の軸→同一の語 (再現性の要)。
     if (coarse) ax = bucketedAxes(ax, 0.25);
     setSliders(ax);
