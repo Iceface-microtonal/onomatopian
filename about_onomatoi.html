@@ -88,19 +88,38 @@
     「かたち」から「それらしく聞こえる語」を合成します。
   </p>
 
-  <h2>しくみ — 4 つの軸</h2>
-  <p>描いた 1 ストロークから 4 つの軸を抽出します:</p>
+  <h2>しくみ — かたちを「意味」と「口」の両方として読む</h2>
+  <p class="lead" style="font-size:15px;">
+    Onomatoi は、描かれた形を<strong>「意味の印象」と「発音するときの口の形」の両方</strong>として読み、
+    日本語に似た架空のことばとして発声します。
+  </p>
+
+  <h3>かたちの意味論 — 4 つの軸</h3>
+  <p>この形が<em>どのような性質に見えるか</em>を読みます:</p>
   <table>
     <tr><th>軸</th><th>かたちのどこを見るか</th><th>音への効き方</th></tr>
-    <tr><td><code>size</code> 大小</td><td>絵の大きさ (対角線比)</td><td>大きい → a/o など重い母音、g/b など有声子音</td></tr>
+    <tr><td><code>size</code> 大小</td><td>絵の大きさ (対角線比)</td><td>大きい → 低く重い声、g/b など有声子音</td></tr>
     <tr><td><code>sharp</code> 鋭さ</td><td>線の折れの鋭さ</td><td>鋭い → k/t/ch など破裂・破擦音。鈍い → m/w や母音単独</td></tr>
     <tr><td><code>texture</code> 質感</td><td>折返し・蛇行の量</td><td>粗い → モーラ数が増え、反復 (きらきら型) や促音 ッ が発火</td></tr>
-    <tr><td><code>bright</code> 明暗</td><td>画面の上下位置</td><td>上 (明) → i/e の明るい母音。下 (暗) → o/u</td></tr>
+    <tr><td><code>bright</code> 明暗</td><td>画面の上下位置</td><td>上 (明) → 高めの声。下 (暗) → 低め</td></tr>
+  </table>
+
+  <h3>口のかたち — 2 つの調音軸</h3>
+  <p>同じ形を、<em>もし口でなぞって発音するならどんな口になるか</em>としても読みます:</p>
+  <table>
+    <tr><th>軸</th><th>かたちのどこを見るか</th><th>音への効き方</th></tr>
+    <tr><td><code>round</code> 円唇</td><td>横に引いた線 ↔ 小さく閉じた丸</td><td>横長 → 唇を横に引く い。小さな丸 → すぼめる う</td></tr>
+    <tr><td><code>open</code> 開口</td><td>どれだけ大きく囲って開けたか</td><td>大きな丸 → 大きく開いた あ。細い線 → 閉じた口</td></tr>
   </table>
   <p>
-    この 4 軸ベクトルが、各子音・母音に与えられた音象徴バイアス表と照合され、
+    前者は「この形は、大きいか小さいか・丸いか鋭いか・滑らかか反復的か・明るいか暗いか」を読む。
+    後者は「この形を口にするなら、唇は横に開くかすぼむか・口は大きく開くか閉じるか」を読む。
+    丸→あ、横棒→い、小円→う、横長の楕円→え —— <strong>母音は口の形が決めます</strong>。
+  </p>
+  <p>
+    この 6 軸が、各子音・母音に与えられた音象徴バイアス表と照合され、
     日本語的なモーラ列 (子音+母音、母音単独、促音 <code>Q</code>、撥音 <code>N</code>) が
-    確率的に選ばれます。<strong>同じ描写からは必ず同じ語</strong>が生まれます (決定的生成) ——
+    選ばれます。<strong>同じ描写からは必ず同じ語</strong>が生まれます (決定的生成) ——
     あなたの描いたかたちに、その語が「名付け」られるのです。
   </p>
 
@@ -108,7 +127,7 @@
   <ul>
     <li><strong>描く</strong> — キャンバスに 1 ストローク描くと即発声。✕ 消しゴムでリセット</li>
     <li><strong>PLAY</strong> — 最後の発声をそのまま何度でもリピート</li>
-    <li><strong>TUNE スライダー</strong> — 4 軸を直接動かして実験</li>
+    <li><strong>TUNE スライダー</strong> — 6 軸を直接動かして実験</li>
     <li><strong>プリセット</strong> — bouba/kiki/maluma/takete (音象徴研究の古典) +
         日本語オノマトペ 6 種。初回タップは正確な発音、2 回目以降は変奏</li>
     <li><strong>ROMAJI 直接入力</strong> — 好きなモーラ列を発声 (例: <code>cha pu cha pu</code>)</li>
@@ -126,6 +145,15 @@
     2026-07-08: 本体コアの v7 更新 (実在オノマトペ型への整形/長母音サステイン/継続撥音/
     連続母音かい・こう) をこの Web 版にも移植しました。
     2026-06-22 までの旧バージョンは <a href="./iceface_onomatopian.html">こちら</a> に保存してあります。
+  </p>
+
+  <h2>フィードバックとデータの利用について</h2>
+  <p>
+    👍👎 の投票と理由の記述は、<strong>お使いのブラウザ内 (localStorage) にのみ保存され、
+    自動では送信されません</strong>。FEEDBACK パネルの COPY で書き出したデータを
+    共有していただいた場合、その内容 (軸の値・生成語・評価・理由) は
+    <strong>Onomatoi の生成モデル (音象徴バイアス表) の改善・調整に利用します</strong>。
+    描いた絵そのものや個人を特定する情報は含まれません。
   </p>
 </div>
 
@@ -152,19 +180,39 @@
     it synthesizes a word that <em>sounds like</em> your shape.
   </p>
 
-  <h2>How it works — four axes</h2>
-  <p>From a single stroke, four axes are extracted:</p>
+  <h2>How it works — reading a shape as both meaning and mouth</h2>
+  <p class="lead" style="font-size:15px;">
+    Onomatoi reads a drawn shape <strong>both as a semantic impression and as the mouth
+    that would pronounce it</strong>, and speaks it as an invented, Japanese-like word.
+  </p>
+
+  <h3>Semantics of shape — four axes</h3>
+  <p>What kind of thing does this shape look like?</p>
   <table>
     <tr><th>Axis</th><th>What it reads from the shape</th><th>Effect on sound</th></tr>
-    <tr><td><code>size</code></td><td>bounding-box scale</td><td>big → heavy vowels a/o, voiced consonants g/b</td></tr>
+    <tr><td><code>size</code></td><td>bounding-box scale</td><td>big → low heavy voice, voiced consonants g/b</td></tr>
     <tr><td><code>sharp</code></td><td>sharpness of corners</td><td>spiky → plosives/affricates k/t/ch; blunt → m/w or bare vowels</td></tr>
     <tr><td><code>texture</code></td><td>folds and wiggliness</td><td>rough → more morae, reduplication (kira-kira type), geminate <code>Q</code></td></tr>
-    <tr><td><code>bright</code></td><td>vertical position on canvas</td><td>high (bright) → vowels i/e; low (dark) → o/u</td></tr>
+    <tr><td><code>bright</code></td><td>vertical position on canvas</td><td>high → brighter voice; low → darker</td></tr>
+  </table>
+
+  <h3>Shape of the mouth — two articulatory axes</h3>
+  <p>If you were to trace this shape with your mouth, what mouth would it be?</p>
+  <table>
+    <tr><th>Axis</th><th>What it reads from the shape</th><th>Effect on sound</th></tr>
+    <tr><td><code>round</code></td><td>a wide horizontal line ↔ a small closed circle</td><td>wide → lips spread, <em>i</em>; small circle → lips pursed, <em>u</em></td></tr>
+    <tr><td><code>open</code></td><td>how large and enclosed the shape is</td><td>big circle → wide-open <em>a</em>; thin line → closed mouth</td></tr>
   </table>
   <p>
-    The axis vector is matched against sound-symbolic bias tables for every consonant and
+    The first four read what the shape <em>means</em>; the last two read what mouth it
+    <em>would take to say it</em>. A circle → <em>a</em>, a horizontal bar → <em>i</em>,
+    a small circle → <em>u</em>, a wide ellipse → <em>e</em> —
+    <strong>vowels are chosen by the mouth</strong>.
+  </p>
+  <p>
+    These six axes are matched against sound-symbolic bias tables for every consonant and
     vowel, and a Japanese-style mora sequence (CV, bare vowel, geminate <code>Q</code>,
-    moraic nasal <code>N</code>) is sampled probabilistically.
+    moraic nasal <code>N</code>) is selected.
     <strong>The same drawing always yields the same word</strong> (deterministic generation) —
     your shape gets, in effect, named.
   </p>
@@ -173,7 +221,7 @@
   <ul>
     <li><strong>Draw</strong> — one stroke on the canvas speaks immediately. ✕ Eraser resets</li>
     <li><strong>PLAY</strong> — repeats the last utterance exactly, as many times as you like</li>
-    <li><strong>TUNE sliders</strong> — drive the four axes directly</li>
+    <li><strong>TUNE sliders</strong> — drive the six axes directly</li>
     <li><strong>Presets</strong> — bouba/kiki/maluma/takete (the classics of sound-symbolism
         research) plus six Japanese onomatopoeia. First tap speaks the canonical word;
         later taps improvise variations</li>
@@ -193,6 +241,16 @@
     sustained long vowels, continuation-ん, and vowel glides like <em>kai/kou</em>) into this
     web version. The version through 2026-06-22 is preserved
     <a href="./iceface_onomatopian.html">here</a>.
+  </p>
+
+  <h2>Feedback &amp; data use</h2>
+  <p>
+    👍👎 votes and written reasons are <strong>stored only in your browser (localStorage)
+    and are never sent automatically</strong>. If you export them with COPY and share them
+    with us, the contents (axis values, generated word, vote, reason) are
+    <strong>used to improve and tune Onomatoi's generative model</strong> (its
+    sound-symbolic bias tables). No drawing images or personally identifying
+    information are included.
   </p>
 </div>
 

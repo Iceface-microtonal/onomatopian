@@ -137,6 +137,11 @@
   <div class="axis-row"><label>bright</label><input type="range" id="ax-bright" min="-1" max="1" step="0.01" value="0"><span class="val" id="val-bright">+0.00</span></div>
   <div class="axis-row"><label>round</label><input type="range" id="ax-round" min="-1" max="1" step="0.01" value="0"><span class="val" id="val-round">+0.00</span></div>
   <div class="axis-row"><label>open</label><input type="range" id="ax-open" min="-1" max="1" step="0.01" value="0"><span class="val" id="val-open">+0.00</span></div>
+  <div class="axis-row" title="round/open をそのまま口の形に — 描いた形を「発音するときの口」として読んでいる">
+    <label>口</label>
+    <canvas id="mouth-icon" width="46" height="32" style="flex:none;"></canvas>
+    <span class="val" id="mouth-vowel" style="font-size:15px;"></span>
+  </div>
   <div class="chips" id="preset-chips"></div>
   <div class="knob-row" style="margin-top:10px;">
     <span class="knob">bpm <input type="range" id="kn-bpm" min="40" max="240" step="1" value="140"><span id="val-bpm">140</span></span>
@@ -1619,6 +1624,36 @@ function playAndRemember(event, axesUsed, log, src = "tune") {
   if (log) appendLog(event);
 }
 
+// 口アイコン (2026-07-10, ChatGPT提案): round/open を連続的に口の形へ。
+// 「描いた形を口として読んでいる」ことが数値なしで一瞬で伝わる。
+const VOWEL_MOUTH = { "あ": [0.85, 0.0], "い": [-0.6, -0.8], "う": [-0.3, 0.8],
+                      "え": [0.5, -0.4], "お": [0.4, 0.7] };   // [open, round]
+function drawMouthIcon(open, round) {
+  const cv = document.getElementById("mouth-icon");
+  if (!cv) return;
+  const c = cv.getContext("2d");
+  const w = cv.width, h = cv.height;
+  c.clearRect(0, 0, w, h);
+  const spreadN = (1 - round) / 2;
+  const openN = (open + 1) / 2;
+  const mw = (0.30 + 0.55 * spreadN) * w;
+  const mh = Math.max(2.2, (0.06 + 0.62 * openN) * h);
+  c.beginPath();
+  c.ellipse(w / 2, h / 2, mw / 2, mh / 2, 0, 0, 2 * Math.PI);
+  if (mh > h * 0.18) { c.fillStyle = "rgba(232,93,161,0.16)"; c.fill(); }
+  c.strokeStyle = "#e85da1";
+  c.lineWidth = 2.2;
+  c.stroke();
+  // 最も近い母音の仮名を添える (口の空間での最近傍)
+  let best = "", bestD = Infinity;
+  for (const [kana, [o, r]] of Object.entries(VOWEL_MOUTH)) {
+    const d = (open - o) ** 2 + (round - r) ** 2;
+    if (d < bestD) { bestD = d; best = kana; }
+  }
+  const el = document.getElementById("mouth-vowel");
+  if (el) el.textContent = best;
+}
+
 function setSliders(ax) {
   lastAxes = { ...ax };
   const pairs = [["size","size"],["sharp","sharp"],["tex","tex"],["bright","bright"],
@@ -1628,6 +1663,7 @@ function setSliders(ax) {
     document.getElementById("ax-" + id).value = v;
     document.getElementById("val-" + id).textContent = (v >= 0 ? "+" : "") + v.toFixed(2);
   }
+  drawMouthIcon(ax.open ?? 0, ax.round ?? 0);
 }
 function readSliders() {
   return {
@@ -1874,8 +1910,10 @@ document.getElementById("btn-play").addEventListener("click", () => {
     lastAxes = ax;
     document.getElementById("val-" + id).textContent =
       (ax[id === "tex" ? "tex" : id] >= 0 ? "+" : "") + ax[id === "tex" ? "tex" : id].toFixed(2);
+    drawMouthIcon(ax.open ?? 0, ax.round ?? 0);   // 口アイコンも追従
   });
 });
+drawMouthIcon(0, 0);   // 初期表示 (中立の口)
 document.getElementById("kn-bpm").addEventListener("input", e => {
   document.getElementById("val-bpm").textContent = e.target.value;
 });
