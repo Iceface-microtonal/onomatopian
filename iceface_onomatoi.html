@@ -1304,8 +1304,6 @@ function computeLoopPoints(buf) {
   if (loopPointsCache.has(buf)) return loopPointsCache.get(buf);
   const sr = buf.sampleRate, ch = buf.getChannelData(0), dur = ch.length / sr;
   if (dur <= 0.12) { loopPointsCache.set(buf, null); return null; }
-  const edge = 0.02;
-  const win = Math.min(0.18, (dur - edge) * 0.5);
   const snapToRisingZC = (targetSec) => {
     const maxBack = Math.floor(0.04 * sr);
     let idx = Math.min(ch.length - 1, Math.floor(targetSec * sr));
@@ -1315,9 +1313,41 @@ function computeLoopPoints(buf) {
     }
     return targetSec;   // 見つからなければそのまま (無音に近く実害小)
   };
-  const loopEnd = snapToRisingZC(dur - edge);
-  const loopStart = snapToRisingZC(Math.max(0, loopEnd - win));
-  const info = (loopEnd > loopStart) ? { loopStart, loopEnd } : null;
+  // v2 (2026-07-11): ループ窓を「末尾アンカー」から「RMS 定常域アンカー」へ。
+  // 末尾アンカーは (a) mp3 デコードのコーデック余白 (末尾の無音) と (b) 短いテイク
+  // (cv_re 等・実音 0.3s 級) の減衰部を窓に含み、WebAudio の forward loop は折返しごとに
+  // 静→大の音量ジャンプ = 「エッエッ/ウッウッ」のグリッチになっていた (native は
+  // sustainWrap のピンポン往復なので不連続が出ない)。10ms 窓 RMS でピークの 55% 以上が
+  // 続く**最後の連続区間 = 母音の定常域**にループ窓を置く — 定常の前方ループは滑らか。
+  const w = Math.max(1, Math.floor(sr * 0.01));
+  const env = [];
+  for (let i = 0; i + w <= ch.length; i += w) {
+    let s = 0;
+    for (let j = i; j < i + w; j++) s += ch[j] * ch[j];
+    env.push(Math.sqrt(s / w));
+  }
+  const peak = Math.max(...env);
+  if (peak <= 1e-6) { loopPointsCache.set(buf, null); return null; }
+  const thr = peak * 0.55;
+  // **最長**の連続 above-thr 区間 = 母音の定常本体。「最後の区間」だと減衰の裾が閾値を
+  // 跨ぐ孤立 1 窓を拾い、持続テイク (v_eeee 等) がループ不能になる (実測でデバッグ)。
+  let bestS = -1, bestE = -1, curS = -1;
+  for (let i = 0; i <= env.length; i++) {
+    if (i < env.length && env[i] >= thr) { if (curS < 0) curS = i; }
+    else if (curS >= 0) {
+      if (i - curS > bestE - bestS) { bestS = curS; bestE = i; }
+      curS = -1;
+    }
+  }
+  if (bestS < 0) { loopPointsCache.set(buf, null); return null; }
+  const s0 = bestS * 0.01, len = (bestE - bestS) * 0.01;
+  if (len < 0.06) { loopPointsCache.set(buf, null); return null; }   // 定常が無ければループしない
+  // 窓は定常本体の中〜後方 (減衰の肩 15% と立ち上がりを避ける)。短い定常では窓も短く
+  // (len·0.5) — 窓内の減衰勾配 = 折返しの音量差を抑える。
+  const winLen = Math.min(0.18, len * 0.5);
+  const loopEnd = snapToRisingZC(s0 + len * 0.85);
+  const loopStart = snapToRisingZC(Math.max(s0, loopEnd - winLen));
+  const info = (loopEnd > loopStart + 0.03) ? { loopStart, loopEnd } : null;
   loopPointsCache.set(buf, info);
   return info;
 }
