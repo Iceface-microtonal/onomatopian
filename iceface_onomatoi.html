@@ -1263,13 +1263,9 @@ function sampleUrlCandidates(key) {
     const fb = CONTN_FALLBACK[vowel];
     if (fb) return [key, fb];
   }
-  // 母音単独は持続テイク (v_aaaa 等, 2026-07-09 録音・~1s 定常部) を優先 —
-  // 長音 (あーーー/かーーー) がテイク実長のぶんは無ループでそのまま伸び、
-  // 超えた分だけ pingPongExtend が引き継ぐ (テイクが長いほど延長の出番が減る)。
-  if (/^v_[aiueo]$/.test(key)) {
-    const v = key.slice(2);
-    return ["v_" + v.repeat(4), key];
-  }
+  // (2026-07-11 v3: 母音単独の持続テイク優先 [v_aaaa 等] は撤回 — 延長機構の廃止で
+  //  各モーラが個別に鳴る方式に戻ったため、1モーラ向けの自然な attack/decay を持つ
+  //  短い v_<v> テイクをそのまま使うのが正しい)
   return [key];
 }
 // Phase 1: fetch (gesture 不要なのでページロード直後に並列で始める)
@@ -1297,82 +1293,9 @@ function fetchAllSamples() {
   }
   return fetchAllPromise;
 }
-// RMS 定常域 (10ms 窓・ピークの 55% 以上が続く**最長**の連続区間) を検出する。
-// v2 (2026-07-11): 末尾アンカーは (a) mp3 デコードのコーデック余白と (b) 短いテイク
-// (cv_re 等) の減衰部を窓に含んでしまう問題があった → 定常域アンカーに変更。
-// 「最後の区間」でなく「最長の区間」を取るのは、減衰の裾が閾値を跨ぐ孤立1窓を
-// 拾うと持続テイク (v_eeee 等) がループ不能になるため (実測でデバッグ)。
-function findSteadyWindow(buf) {
-  const sr = buf.sampleRate, ch = buf.getChannelData(0), dur = ch.length / sr;
-  if (dur <= 0.12) return null;
-  const w = Math.max(1, Math.floor(sr * 0.01));
-  const env = [];
-  for (let i = 0; i + w <= ch.length; i += w) {
-    let s = 0;
-    for (let j = i; j < i + w; j++) s += ch[j] * ch[j];
-    env.push(Math.sqrt(s / w));
-  }
-  const peak = Math.max(...env);
-  if (peak <= 1e-6) return null;
-  const thr = peak * 0.55;
-  let bestS = -1, bestE = -1, curS = -1;
-  for (let i = 0; i <= env.length; i++) {
-    if (i < env.length && env[i] >= thr) { if (curS < 0) curS = i; }
-    else if (curS >= 0) {
-      if (i - curS > bestE - bestS) { bestS = curS; bestE = i; }
-      curS = -1;
-    }
-  }
-  if (bestS < 0) return null;
-  const s0 = bestS * 0.01, len = (bestE - bestS) * 0.01;
-  if (len < 0.06) return null;   // 定常が無ければ延長しない
-  return { s0, len };
-}
-// 長母音延長 v2 (2026-07-11): ネイティブ forward loop (loopStart/loopEnd 2点を
-// それぞれゼロクロスへスナップ) を廃止し、FormantSynth.sustainWrap と同じ**単一
-// pivot を中心にした対称ピンポン往復**で任意長バッファを事前生成する。
-// v1 (RMS 定常域アンカー + forward loop) でも解消せず: 自然発声は定常域でも 10ms
-// 窓で ~1dB の減衰・数Hz の F0 ドリフトがあり、forward loop は折返しのたびに
-// 音量/ピッチがジャンプしていた (「エッエッ/ウッウッ」)。
-// v1.5 (loopStart/loopEnd を個別にゼロクロススナップしてピンポン) でも実測で
-// 境界ジャンプが残った (diff 最大 0.078 = 全体最大隣接差の 58% 相当) — 正弦波は
-// ゼロクロスで勾配が最大になるため、2点を**独立に**スナップすると量子化誤差
-// (1サンプル分のタイミングのズレ) が振幅ジャンプとして拡大されてしまう。
-// native sustainWrap はゼロクロスへのスナップを一切せず、連続時刻 t の折返し
-// (t=pivot の前後で読み出し方向だけが反転) を線形補間で読むため、境界点は
-// 「1つの値」に自明に一致し不連続が原理的に起きない。ここでも同じ原理で
-// **1点 (pivot) だけを基準にした対称写像**にする — pivot と pivot-win の
-// どちらもそこへ来たら折り返すだけの自己参照点になり、ゼロクロスかどうかは
-// 連続性に無関係になる。
-// key: buf → Map<targetLenSamples, AudioBuffer>
-const pingPongCache = new Map();
-function pingPongExtend(ctx, buf, targetDurSec) {
-  const sr = buf.sampleRate;
-  const targetLen = Math.ceil(targetDurSec * sr);
-  if (targetLen <= buf.length) return buf;   // 延長不要 (呼び出し側で span<=duration をガード済み)
-  const steady = findSteadyWindow(buf);
-  if (!steady) return buf;   // 定常域が無い (短すぎ/無音) → 延長不能、素のまま (呼び出し側が dur で止める)
-  let cache = pingPongCache.get(buf);
-  if (!cache) { cache = new Map(); pingPongCache.set(buf, cache); }
-  if (cache.has(targetLen)) return cache.get(targetLen);
-  const ch = buf.getChannelData(0);
-  // 窓は定常本体の中〜後方 (減衰の肩 15% と立ち上がりを避ける)。短い定常では窓も短く
-  // (len·0.5) — 窓内の減衰勾配 = 折返しの音量差を抑える。
-  const win = Math.max(1, Math.round(Math.min(0.18, steady.len * 0.5) * sr));
-  const pivotIdx = Math.max(win, Math.min(ch.length - 1, Math.round((steady.s0 + steady.len * 0.85) * sr)));
-  const out = new Float32Array(targetLen);
-  const headLen = Math.min(pivotIdx, targetLen);
-  out.set(ch.subarray(0, headLen), 0);          // 頭 (子音+定常入り) はそのまま
-  for (let i = pivotIdx; i < targetLen; i++) {
-    const phase = (i - pivotIdx) % (2 * win);
-    const srcIdx = phase <= win ? pivotIdx - phase : pivotIdx - (2 * win - phase);
-    out[i] = ch[srcIdx];
-  }
-  const newBuf = ctx.createBuffer(1, targetLen, sr);
-  newBuf.copyToChannel(out, 0);
-  cache.set(targetLen, newBuf);
-  return newBuf;
-}
+// (2026-07-11 v3: 長母音サステインの延長機構 — forward loop 版 computeLoopPoints も
+//  ピンポン事前レンダ版 findSteadyWindow/pingPongExtend も — は削除した。経緯は
+//  analyzeMoras のコメント参照。同一母音の連続はモーラ個別の再アタック再生に戻した。)
 // Phase 2: decode。AudioContext は suspended 状態でも decode 可能なので、
 // ページロード中に先行 decode する (gesture が要るのは resume = 発音のみ)。
 async function decodeSample(key) {
@@ -1408,13 +1331,17 @@ function bufferFor(mora) {
 function contNBufferFor(vowel) { return sampleBank.get("v_" + vowel + "_nn") ?? null; }
 function diphBufferFor(v1, v2) { return sampleBank.get("diph_" + v1 + v2) ?? null; }
 
-// ─── v7: モーラ列を走査し、通常再生ではカバーできない3パターンを検出する。
-// (FormantSynth の longVowelExtension / continuationNVowel / cvDiphPrev の移植・簡易版)
-//  - chainRoot/chainMember: 直前と同じ母音が続く V-only モーラ (ー) → root から
-//    ネイティブループで継続再生し、member 側は個別に鳴らさない (「短い母音2回」化を防ぐ)。
+// ─── モーラ列を走査し、通常再生ではカバーできない2パターンを検出する。
+// (FormantSynth の continuationNVowel / cvDiphPrev の移植・簡易版)
 //  - contN: 直前が母音で終わるモーラの後の ん → v_<v>_nn (無ければ n_N)。
 //  - diphPartner: 直前が CV (onset 有) で終わり、母音が変わる V-only モーラ (かい/こう) →
 //    diph_<v1><v2> の後半 (2 母音目への遷移部) を使う。
+// 2026-07-11 v3: 長母音の連続延長 (chainRoot/chainMember) は**廃止**。同一母音の連続
+// (iiii / かーー) は各モーラが v_<v> を個別に再アタックする旧スタイルに戻した。
+// 経緯: forward loop (v1) → ピンポン事前レンダ (v2) と直しても実聴でグリッチ感が
+// 残った — mp3 (22.05kHz 48kbps) の定常母音は圧縮の時間方向スミアリングが乗って
+// おり、native の wav と同じ「1テイク継続」戦略が web では成立しない。個別再生は
+// 折返し/継ぎ目という概念自体が無く、各モーラが録音の自然な attack/decay で鳴る。
 function analyzeMoras(moras) {
   const plan = moras.map(() => ({ kind: "normal" }));
   for (let i = 0; i < moras.length; i++) {
@@ -1422,19 +1349,6 @@ function analyzeMoras(moras) {
     if (m.isN) {
       if (i > 0 && !moras[i - 1].isN) plan[i] = { kind: "contN", prevIndex: i - 1 };
       continue;
-    }
-    if (i > 0 && m.onset === null && !moras[i - 1].isN && moras[i - 1].nucleus === m.nucleus) {
-      let root = i - 1;
-      while (root > 0 && moras[root].onset === null && !moras[root].isN &&
-             moras[root].nucleus === moras[root - 1].nucleus) root--;
-      // root がすでに別種 (diphPartner/contN 等) に割り当て済みなら、その root へは
-      // 延長できない (root 自体が別サンプルを鳴らす)。無音で脱落させるより、
-      // このモーラ単体を通常再生する方が安全 (自由入力の romaji はどんな並びも来る)。
-      if (plan[root].kind === "normal" || plan[root].kind === "chainRoot") {
-        plan[i] = { kind: "chainMember", rootIndex: root };
-        plan[root] = { kind: "chainRoot", memberEnd: i };
-        continue;
-      }
     }
     if (i > 0 && m.onset === null && moras[i - 1].onset !== null && !moras[i - 1].isN &&
         moras[i - 1].nucleus !== m.nucleus && diphBufferFor(moras[i - 1].nucleus, m.nucleus)) {
@@ -1478,8 +1392,7 @@ function playEvent(event) {
 }
 // buf を [start, start+dur] (ctx 時刻) に 3ms/12ms フェード付きでスケジュール。
 // bufferOffsetSec: buf 内の再生開始位置 (diph の遷移部だけ使う場合など)。
-// (2026-07-11 v2: ネイティブ forward loop は廃止 — pingPongExtend が事前に伸ばした
-//  buf をそのまま渡すだけになったので、ここではループ機構そのものが不要になった)
+// (2026-07-11: ループ機構なし — 全モーラが1バッファ1発の素朴なスケジュール)
 function scheduleOne(ctx, buf, start, dur, amplitude, bufferOffsetSec = 0) {
   const src = ctx.createBufferSource();
   src.buffer = buf;
@@ -1505,21 +1418,7 @@ function scheduleEvent(ctx, event) {
     const m = moras[i], p = plan[i];
     t += m.gapMs / 1000;                  // 促音 = 無音 gap
 
-    if (p.kind === "chainMember") {
-      // root 側の延長再生でカバー済み → このモーラでは何も鳴らさない。
-    } else if (p.kind === "chainRoot") {
-      // 長母音サステイン: root モーラのサンプルで直後の同母音チェーン全体
-      // (root..memberEnd) の長さぶん継続再生する。
-      // v2 (2026-07-11): テイクがスパンをまかなえるならループ自体をかけない
-      // (素の自然減衰のまま — 折返しが無いので原理的にグリッチが起きない)。
-      // まかなえない場合だけ pingPongExtend で事前に伸ばしたバッファを使う。
-      const span = (p.memberEnd - i + 1) * moraSec;
-      const buf = bufferFor(m);
-      if (buf) {
-        const playBuf = span <= buf.duration ? buf : pingPongExtend(ctx, buf, span);
-        scheduleOne(ctx, playBuf, t, span, m.amplitude);
-      }
-    } else if (p.kind === "contN") {
+    if (p.kind === "contN") {
       // 継続撥音: 直前母音から続けて v_<v>_nn を preRoll ぶん早めに立ち上げる
       // (前モーラの自然な減衰と時間的に重なる = 先行オーバーラップ)。無ければ通常の ん。
       const buf = contNBufferFor(moras[p.prevIndex].nucleus);
@@ -1563,7 +1462,7 @@ function axesEqual(a, b) {
 // (Google Apps Script 等で公開ユーザーから収集したい場合用。空なら何もしない)。
 const FEEDBACK_ENDPOINT = "";
 const FB_VERSION = 4;          // v4: 口の2軸/描線頂点列/K・角・語形タグ/エンジン版を追加 (v3: reason)
-const ENGINE_VERSION = "v11";  // 生成ロジックの版 (バケットや manner の変更をまたぐ集計用)
+const ENGINE_VERSION = "v12";  // 生成/音声実現の版 (集計用)。v12 = 長母音を個別再アタック再生に戻した音声版 (生成ロジックは v11 と同一)
 let feedbackLog = [];
 try { feedbackLog = JSON.parse(localStorage.getItem("onomatoi.feedback") || "[]"); } catch (e) {}
 let utteranceSeq = 0;
