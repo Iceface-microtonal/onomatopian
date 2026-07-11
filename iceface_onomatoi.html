@@ -1264,7 +1264,8 @@ function sampleUrlCandidates(key) {
     if (fb) return [key, fb];
   }
   // 母音単独は持続テイク (v_aaaa 等, 2026-07-09 録音・~1s 定常部) を優先 —
-  // 長音 (あーーー/かーーー) が computeLoopPoints の forward loop で減衰せず伸びる。
+  // 長音 (あーーー/かーーー) がテイク実長のぶんは無ループでそのまま伸び、
+  // 超えた分だけ pingPongExtend が引き継ぐ (テイクが長いほど延長の出番が減る)。
   if (/^v_[aiueo]$/.test(key)) {
     const v = key.slice(2);
     return ["v_" + v.repeat(4), key];
@@ -1296,29 +1297,14 @@ function fetchAllSamples() {
   }
   return fetchAllPromise;
 }
-// 長母音サステイン用ループ点 (FormantSynth.sustainWrap の移植)。
-// ping-pong でなくネイティブ forward loop (loopStart/loopEnd) を使うため、
-// 尾の定常部の**上昇ゼロクロス**に揃えてクリックを避ける。duration<=0.12s は対象外。
-const loopPointsCache = new Map();   // key: AudioBuffer → {loopStart, loopEnd} | null
-function computeLoopPoints(buf) {
-  if (loopPointsCache.has(buf)) return loopPointsCache.get(buf);
+// RMS 定常域 (10ms 窓・ピークの 55% 以上が続く**最長**の連続区間) を検出する。
+// v2 (2026-07-11): 末尾アンカーは (a) mp3 デコードのコーデック余白と (b) 短いテイク
+// (cv_re 等) の減衰部を窓に含んでしまう問題があった → 定常域アンカーに変更。
+// 「最後の区間」でなく「最長の区間」を取るのは、減衰の裾が閾値を跨ぐ孤立1窓を
+// 拾うと持続テイク (v_eeee 等) がループ不能になるため (実測でデバッグ)。
+function findSteadyWindow(buf) {
   const sr = buf.sampleRate, ch = buf.getChannelData(0), dur = ch.length / sr;
-  if (dur <= 0.12) { loopPointsCache.set(buf, null); return null; }
-  const snapToRisingZC = (targetSec) => {
-    const maxBack = Math.floor(0.04 * sr);
-    let idx = Math.min(ch.length - 1, Math.floor(targetSec * sr));
-    for (let k = 0; k < maxBack && idx - k > 1; k++) {
-      const i = idx - k;
-      if (ch[i - 1] < 0 && ch[i] >= 0) return i / sr;
-    }
-    return targetSec;   // 見つからなければそのまま (無音に近く実害小)
-  };
-  // v2 (2026-07-11): ループ窓を「末尾アンカー」から「RMS 定常域アンカー」へ。
-  // 末尾アンカーは (a) mp3 デコードのコーデック余白 (末尾の無音) と (b) 短いテイク
-  // (cv_re 等・実音 0.3s 級) の減衰部を窓に含み、WebAudio の forward loop は折返しごとに
-  // 静→大の音量ジャンプ = 「エッエッ/ウッウッ」のグリッチになっていた (native は
-  // sustainWrap のピンポン往復なので不連続が出ない)。10ms 窓 RMS でピークの 55% 以上が
-  // 続く**最後の連続区間 = 母音の定常域**にループ窓を置く — 定常の前方ループは滑らか。
+  if (dur <= 0.12) return null;
   const w = Math.max(1, Math.floor(sr * 0.01));
   const env = [];
   for (let i = 0; i + w <= ch.length; i += w) {
@@ -1327,10 +1313,8 @@ function computeLoopPoints(buf) {
     env.push(Math.sqrt(s / w));
   }
   const peak = Math.max(...env);
-  if (peak <= 1e-6) { loopPointsCache.set(buf, null); return null; }
+  if (peak <= 1e-6) return null;
   const thr = peak * 0.55;
-  // **最長**の連続 above-thr 区間 = 母音の定常本体。「最後の区間」だと減衰の裾が閾値を
-  // 跨ぐ孤立 1 窓を拾い、持続テイク (v_eeee 等) がループ不能になる (実測でデバッグ)。
   let bestS = -1, bestE = -1, curS = -1;
   for (let i = 0; i <= env.length; i++) {
     if (i < env.length && env[i] >= thr) { if (curS < 0) curS = i; }
@@ -1339,17 +1323,55 @@ function computeLoopPoints(buf) {
       curS = -1;
     }
   }
-  if (bestS < 0) { loopPointsCache.set(buf, null); return null; }
+  if (bestS < 0) return null;
   const s0 = bestS * 0.01, len = (bestE - bestS) * 0.01;
-  if (len < 0.06) { loopPointsCache.set(buf, null); return null; }   // 定常が無ければループしない
+  if (len < 0.06) return null;   // 定常が無ければ延長しない
+  return { s0, len };
+}
+// 長母音延長 v2 (2026-07-11): ネイティブ forward loop (loopStart/loopEnd 2点を
+// それぞれゼロクロスへスナップ) を廃止し、FormantSynth.sustainWrap と同じ**単一
+// pivot を中心にした対称ピンポン往復**で任意長バッファを事前生成する。
+// v1 (RMS 定常域アンカー + forward loop) でも解消せず: 自然発声は定常域でも 10ms
+// 窓で ~1dB の減衰・数Hz の F0 ドリフトがあり、forward loop は折返しのたびに
+// 音量/ピッチがジャンプしていた (「エッエッ/ウッウッ」)。
+// v1.5 (loopStart/loopEnd を個別にゼロクロススナップしてピンポン) でも実測で
+// 境界ジャンプが残った (diff 最大 0.078 = 全体最大隣接差の 58% 相当) — 正弦波は
+// ゼロクロスで勾配が最大になるため、2点を**独立に**スナップすると量子化誤差
+// (1サンプル分のタイミングのズレ) が振幅ジャンプとして拡大されてしまう。
+// native sustainWrap はゼロクロスへのスナップを一切せず、連続時刻 t の折返し
+// (t=pivot の前後で読み出し方向だけが反転) を線形補間で読むため、境界点は
+// 「1つの値」に自明に一致し不連続が原理的に起きない。ここでも同じ原理で
+// **1点 (pivot) だけを基準にした対称写像**にする — pivot と pivot-win の
+// どちらもそこへ来たら折り返すだけの自己参照点になり、ゼロクロスかどうかは
+// 連続性に無関係になる。
+// key: buf → Map<targetLenSamples, AudioBuffer>
+const pingPongCache = new Map();
+function pingPongExtend(ctx, buf, targetDurSec) {
+  const sr = buf.sampleRate;
+  const targetLen = Math.ceil(targetDurSec * sr);
+  if (targetLen <= buf.length) return buf;   // 延長不要 (呼び出し側で span<=duration をガード済み)
+  const steady = findSteadyWindow(buf);
+  if (!steady) return buf;   // 定常域が無い (短すぎ/無音) → 延長不能、素のまま (呼び出し側が dur で止める)
+  let cache = pingPongCache.get(buf);
+  if (!cache) { cache = new Map(); pingPongCache.set(buf, cache); }
+  if (cache.has(targetLen)) return cache.get(targetLen);
+  const ch = buf.getChannelData(0);
   // 窓は定常本体の中〜後方 (減衰の肩 15% と立ち上がりを避ける)。短い定常では窓も短く
   // (len·0.5) — 窓内の減衰勾配 = 折返しの音量差を抑える。
-  const winLen = Math.min(0.18, len * 0.5);
-  const loopEnd = snapToRisingZC(s0 + len * 0.85);
-  const loopStart = snapToRisingZC(Math.max(s0, loopEnd - winLen));
-  const info = (loopEnd > loopStart + 0.03) ? { loopStart, loopEnd } : null;
-  loopPointsCache.set(buf, info);
-  return info;
+  const win = Math.max(1, Math.round(Math.min(0.18, steady.len * 0.5) * sr));
+  const pivotIdx = Math.max(win, Math.min(ch.length - 1, Math.round((steady.s0 + steady.len * 0.85) * sr)));
+  const out = new Float32Array(targetLen);
+  const headLen = Math.min(pivotIdx, targetLen);
+  out.set(ch.subarray(0, headLen), 0);          // 頭 (子音+定常入り) はそのまま
+  for (let i = pivotIdx; i < targetLen; i++) {
+    const phase = (i - pivotIdx) % (2 * win);
+    const srcIdx = phase <= win ? pivotIdx - phase : pivotIdx - (2 * win - phase);
+    out[i] = ch[srcIdx];
+  }
+  const newBuf = ctx.createBuffer(1, targetLen, sr);
+  newBuf.copyToChannel(out, 0);
+  cache.set(targetLen, newBuf);
+  return newBuf;
 }
 // Phase 2: decode。AudioContext は suspended 状態でも decode 可能なので、
 // ページロード中に先行 decode する (gesture が要るのは resume = 発音のみ)。
@@ -1362,7 +1384,6 @@ async function decodeSample(key) {
     if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     const buf = await audioCtx.decodeAudioData(raw.slice(0));
     const trimmed = trimLeadingSilence(buf);
-    computeLoopPoints(trimmed);   // 事前計算 (再生時の毎回計算を避ける)
     sampleBank.set(key, trimmed);
     return trimmed;
   } catch (e) {
@@ -1457,11 +1478,11 @@ function playEvent(event) {
 }
 // buf を [start, start+dur] (ctx 時刻) に 3ms/12ms フェード付きでスケジュール。
 // bufferOffsetSec: buf 内の再生開始位置 (diph の遷移部だけ使う場合など)。
-// loop: {loopStart, loopEnd} を渡すとネイティブループ (長母音サステイン)。
-function scheduleOne(ctx, buf, start, dur, amplitude, bufferOffsetSec = 0, loop = null) {
+// (2026-07-11 v2: ネイティブ forward loop は廃止 — pingPongExtend が事前に伸ばした
+//  buf をそのまま渡すだけになったので、ここではループ機構そのものが不要になった)
+function scheduleOne(ctx, buf, start, dur, amplitude, bufferOffsetSec = 0) {
   const src = ctx.createBufferSource();
   src.buffer = buf;
-  if (loop) { src.loop = true; src.loopStart = loop.loopStart; src.loopEnd = loop.loopEnd; }
   const g = ctx.createGain();
   g.gain.setValueAtTime(0, start);
   g.gain.linearRampToValueAtTime(amplitude, start + 0.003);
@@ -1487,11 +1508,17 @@ function scheduleEvent(ctx, event) {
     if (p.kind === "chainMember") {
       // root 側の延長再生でカバー済み → このモーラでは何も鳴らさない。
     } else if (p.kind === "chainRoot") {
-      // 長母音サステイン: root モーラのサンプルをネイティブループで
-      // 直後の同母音チェーン全体 (root..memberEnd) の長さぶん継続再生する。
+      // 長母音サステイン: root モーラのサンプルで直後の同母音チェーン全体
+      // (root..memberEnd) の長さぶん継続再生する。
+      // v2 (2026-07-11): テイクがスパンをまかなえるならループ自体をかけない
+      // (素の自然減衰のまま — 折返しが無いので原理的にグリッチが起きない)。
+      // まかなえない場合だけ pingPongExtend で事前に伸ばしたバッファを使う。
       const span = (p.memberEnd - i + 1) * moraSec;
       const buf = bufferFor(m);
-      if (buf) scheduleOne(ctx, buf, t, span, m.amplitude, 0, computeLoopPoints(buf));
+      if (buf) {
+        const playBuf = span <= buf.duration ? buf : pingPongExtend(ctx, buf, span);
+        scheduleOne(ctx, playBuf, t, span, m.amplitude);
+      }
     } else if (p.kind === "contN") {
       // 継続撥音: 直前母音から続けて v_<v>_nn を preRoll ぶん早めに立ち上げる
       // (前モーラの自然な減衰と時間的に重なる = 先行オーバーラップ)。無ければ通常の ん。
