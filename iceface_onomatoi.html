@@ -142,10 +142,12 @@
   <div class="axis-row"><label>bright</label><input type="range" id="ax-bright" min="-1" max="1" step="0.01" value="0"><span class="val" id="val-bright">+0.00</span></div>
   <div class="axis-row"><label>round</label><input type="range" id="ax-round" min="-1" max="1" step="0.01" value="0"><span class="val" id="val-round">+0.00</span></div>
   <div class="axis-row"><label>open</label><input type="range" id="ax-open" min="-1" max="1" step="0.01" value="0"><span class="val" id="val-open">+0.00</span></div>
-  <div class="axis-row" title="round/open をそのまま口の形に — 描いた形を「発音するときの口」として読んでいる">
+  <div class="axis-row" title="round/open をそのまま口の形に — 描いた形を「発音するときの口」として読んでいる。→ の右は発話中のモーラごとの口の推移 (P3)">
     <label>口</label>
     <canvas id="mouth-icon" width="46" height="32" style="flex:none;"></canvas>
     <span class="val" id="mouth-vowel" style="font-size:15px;"></span>
+    <span id="mouth-arrow" style="display:none; color:#aaa; font-size:11px; font-weight:600; flex:none;">→</span>
+    <div id="mouth-timeline" style="display:flex; align-items:flex-end; gap:3px; flex-wrap:wrap;"></div>
   </div>
   <div class="chips" id="preset-chips"></div>
   <div class="knob-row" style="margin-top:10px;">
@@ -1414,9 +1416,11 @@ function scheduleEvent(ctx, event) {
   const plan = analyzeMoras(moras);
   const preRollSec = Math.min(0.1, moraSec * 0.5);   // FormantSynth.contNPreRollMs の移植
   let t = ctx.currentTime + 0.04;
+  const mouthCells = [];   // P3 口の推移列: モーラごとの実スケジュール時刻
   for (let i = 0; i < moras.length; i++) {
     const m = moras[i], p = plan[i];
     t += m.gapMs / 1000;                  // 促音 = 無音 gap
+    mouthCells.push({ m, start: t, end: t + moraSec });
 
     if (p.kind === "contN") {
       // 継続撥音: 直前母音から続けて v_<v>_nn を preRoll ぶん早めに立ち上げる
@@ -1436,6 +1440,7 @@ function scheduleEvent(ctx, event) {
     }
     t += moraSec;
   }
+  renderMouthTimeline(ctx, mouthCells);
 }
 
 // ─── UI 状態 ───
@@ -1699,11 +1704,11 @@ function playAndRemember(event, axesUsed, log, src = "tune", extra = {}) {
 // 「描いた形を口として読んでいる」ことが数値なしで一瞬で伝わる。
 const VOWEL_MOUTH = { "あ": [0.85, 0.0], "い": [-0.6, -0.8], "う": [-0.3, 0.8],
                       "え": [0.5, -0.4], "お": [0.4, 0.7] };   // [open, round]
-function drawMouthIcon(open, round) {
-  const cv = document.getElementById("mouth-icon");
-  if (!cv) return;
-  const c = cv.getContext("2d");
-  const w = cv.width, h = cv.height;
+const VOWEL_MOUTH_L = { a: VOWEL_MOUTH["あ"], i: VOWEL_MOUTH["い"], u: VOWEL_MOUTH["う"],
+                        e: VOWEL_MOUTH["え"], o: VOWEL_MOUTH["お"] };
+// 口の楕円を 1 個描く (mouth-icon と P3 推移列で共用)。
+// lineWidth/fillAlpha で active 強調を表現 (native MouthTimelineView と同じ流儀)。
+function strokeMouth(c, w, h, open, round, lineWidth, fillAlpha) {
   c.clearRect(0, 0, w, h);
   const spreadN = (1 - round) / 2;
   const openN = (open + 1) / 2;
@@ -1711,10 +1716,17 @@ function drawMouthIcon(open, round) {
   const mh = Math.max(2.2, (0.06 + 0.62 * openN) * h);
   c.beginPath();
   c.ellipse(w / 2, h / 2, mw / 2, mh / 2, 0, 0, 2 * Math.PI);
-  if (mh > h * 0.18) { c.fillStyle = "rgba(232,93,161,0.16)"; c.fill(); }
+  if (fillAlpha > 0 && mh > h * 0.18) {
+    c.fillStyle = `rgba(232,93,161,${fillAlpha})`; c.fill();
+  }
   c.strokeStyle = "#e85da1";
-  c.lineWidth = 2.2;
+  c.lineWidth = lineWidth;
   c.stroke();
+}
+function drawMouthIcon(open, round) {
+  const cv = document.getElementById("mouth-icon");
+  if (!cv) return;
+  strokeMouth(cv.getContext("2d"), cv.width, cv.height, open, round, 2.2, 0.16);
   // 最も近い母音の仮名を添える (口の空間での最近傍)
   let best = "", bestD = Infinity;
   for (const [kana, [o, r]] of Object.entries(VOWEL_MOUTH)) {
@@ -1723,6 +1735,70 @@ function drawMouthIcon(open, round) {
   }
   const el = document.getElementById("mouth-vowel");
   if (el) el.textContent = best;
+}
+
+// ─── P3: 口の推移列 (native ② MouthTimelineView の移植, 2026-07-11) ───
+// 発話スケジュールと同期して、モーラごとの口の形が並ぶ。いま鳴っているモーラの
+// 口が立ち (fill+太線+拡大)、発話済みは 0.85 で残り、未発話は 0.35 で待つ。
+// 発話が終わっても列は残る (native と同じ「終了後も推移が読める」挙動)。
+const MOUTH_N = [-0.9, -0.2];   // ん (と促音の閉じ): ほぼ閉じた口
+function mouthForMora(m) {
+  return m.isN ? MOUTH_N : (VOWEL_MOUTH_L[m.nucleus] ?? [0, 0]);
+}
+function moraLabel(m) {
+  return m.isN ? "n" : (m.onset ?? "") + m.nucleus;
+}
+// 駆動は requestAnimationFrame でなく setInterval (50ms): 状態変化はモーラ単位
+// (250ms) の離散なので十分滑らかで、RAF と違い非フォーカスタブでも止まらない
+// (発話は AudioContext 時刻で進むので、表示だけ freeze すると列が置き去りになる)。
+let mouthTimelineTimer = 0;
+// cells: [{ m, start, end }] — start/end は AudioContext 時刻 (scheduleEvent が渡す)。
+function renderMouthTimeline(ctx, cells) {
+  const box = document.getElementById("mouth-timeline");
+  const arrow = document.getElementById("mouth-arrow");
+  if (!box) return;
+  clearInterval(mouthTimelineTimer);
+  box.innerHTML = "";
+  if (!cells.length) { if (arrow) arrow.style.display = "none"; return; }
+  if (arrow) arrow.style.display = "";
+  const small = cells.length > 10;
+  const cw = small ? 16 : 22, chh = small ? 14 : 18;
+  const items = cells.map(cell => {
+    const wrap = document.createElement("div");
+    wrap.style.cssText = "display:flex; flex-direction:column; align-items:center; gap:1px;";
+    const cv = document.createElement("canvas");
+    cv.width = cw; cv.height = chh;
+    cv.style.cssText = "transition:transform 0.08s;";
+    const lb = document.createElement("div");
+    lb.textContent = moraLabel(cell.m);
+    lb.style.cssText = "font-size:8px; color:#999; line-height:1;";
+    wrap.appendChild(cv); wrap.appendChild(lb);
+    box.appendChild(wrap);
+    return { ...cell, wrap, cv, lb, mouth: mouthForMora(cell.m), lastState: null };
+  });
+  const totalEnd = items[items.length - 1].end;
+  function paint() {
+    const now = ctx.currentTime;
+    let anyPending = false;
+    for (const it of items) {
+      const state = now >= it.start && now < it.end ? "active"
+                  : now >= it.end ? "spoken" : "pending";
+      if (state === "pending") anyPending = true;
+      if (state === it.lastState) continue;   // 状態が変わった時だけ再描画
+      it.lastState = state;
+      const active = state === "active";
+      strokeMouth(it.cv.getContext("2d"), cw, chh, it.mouth[0], it.mouth[1],
+                  active ? 2.4 : 1.7, active ? 0.30 : 0);
+      it.cv.style.transform = active ? "scale(1.28)" : "scale(1)";
+      it.wrap.style.opacity = active ? "1.0" : (state === "spoken" ? "0.85" : "0.35");
+      it.lb.style.color = active ? "#e85da1" : "#999";
+    }
+    if (now >= totalEnd + 0.3 && !anyPending) {
+      clearInterval(mouthTimelineTimer);   // 停止 = 最終状態 (全部 spoken 0.85) が残る
+    }
+  }
+  paint();
+  mouthTimelineTimer = setInterval(paint, 50);
 }
 
 function setSliders(ax) {
