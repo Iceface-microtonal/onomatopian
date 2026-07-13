@@ -1,4 +1,4 @@
-# Onomatoi /　おのまとい — Web (self-contained)
+# Onomatoi  /  おのまとい — Web (self-contained)
 
 **▶ Play: https://iceface-microtonal.github.io/onomatopian/**
 
