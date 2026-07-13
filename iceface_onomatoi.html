@@ -412,6 +412,42 @@ function densified(points, spacing) {
   }
   return out;
 }
+
+// P1 (2026-07-12): 珠→スプライン再構成。粗い筆の珠+線形補間は滑らかな曲線を
+// 「珠の継ぎ目に角のある折れ線」にしてしまい、S字の反転が偽の角として発火していた
+// (コウさんフィードバック #9)。Catmull-Rom で珠を通る滑らかな曲線を復元し、
+// **角検出 (strokeComplexity) だけ**この幾何で行う。extractAxes / segmentStroke は
+// 従来の densified のまま = 軸・単位分割・fixture 較正の互換を保つ。
+function splineDensified(points, spacing) {
+  if (points.length < 3 || spacing <= 0) return densified(points, spacing);
+  const m = points.length;
+  // 閉ストローク (丸・多角形) は巡回スプライン: 開曲線として扱うと端点クランプの
+  // 継ぎ目フックが生じ、seam 救済が偽の角として拾う (丸に角が出る)。
+  let pathLen = 0;
+  for (let i = 1; i < m; i++)
+    pathLen += Math.hypot(points[i].x - points[i-1].x, points[i].y - points[i-1].y);
+  const gap = Math.hypot(points[0].x - points[m-1].x, points[0].y - points[m-1].y);
+  const closed = m >= 4 && gap <= pathLen * 0.12;
+  const P = closed
+    ? (i => points[((i % m) + m) % m])
+    : (i => points[Math.max(0, Math.min(m - 1, i))]);
+  const out = [];
+  const segEnd = closed ? m : m - 1;         // closed は 最後→最初 のセグメントも補間
+  for (let i = 0; i < segEnd; i++) {
+    const p0 = P(i - 1), p1 = P(i), p2 = P(i + 1), p3 = P(i + 2);
+    const segLen = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+    const steps = Math.max(1, Math.round(segLen / spacing));
+    for (let s = 0; s < steps; s++) {
+      const t = s / steps, t2 = t * t, t3 = t2 * t;
+      out.push({
+        x: 0.5 * (2*p1.x + (-p0.x + p2.x)*t + (2*p0.x - 5*p1.x + 4*p2.x - p3.x)*t2 + (-p0.x + 3*p1.x - 3*p2.x + p3.x)*t3),
+        y: 0.5 * (2*p1.y + (-p0.y + p2.y)*t + (2*p0.y - 5*p1.y + 4*p2.y - p3.y)*t2 + (-p0.y + 3*p1.y - 3*p2.y + p3.y)*t3),
+      });
+    }
+  }
+  if (!closed) out.push(points[m - 1]);
+  return out;
+}
 function bucketedAxes(ax, step) {
   const q = v => Math.round((v ?? 0) / step) * step;
   return { size: q(ax.size), sharp: q(ax.sharp), tex: q(ax.tex), bright: q(ax.bright),
@@ -957,14 +993,48 @@ function strokeComplexity(points, w, h, maxMora = 16) {
   };
   const turnArr = new Array(n).fill(0);
   for (let i = k; i < n - k; i++) turnArr[i] = turnAt(i, false);
+  // ─── P1 判別ゲート (2026-07-12): 真の角 (転換が一点に集中) と滑らかな反転 (弧に分散) ───
+  // コウさんフィードバック #7 (長方形に破裂音が出ない) と #9 (S字に破裂音が出る) の共通根 =
+  // 両者がほぼ同スコアだった。spec = Onomatoi/docs/FEEDBACK_2026-07-12_kou_phonetics_spec.md P1。
+  // 判別: spread = 倍窓転換角/窓転換角 (角≈1・弧≈2) + share = 単位曲率の局所集中率。
+  const unitTurn = new Array(n).fill(0);
+  for (let i = 1; i < n - 1; i++) {
+    const v1x = points[i].x - points[i-1].x, v1y = points[i].y - points[i-1].y;
+    const v2x = points[i+1].x - points[i].x, v2y = points[i+1].y - points[i].y;
+    const cross = v1x * v2y - v1y * v2x, dot = v1x * v2x + v1y * v2y;
+    if (Math.abs(cross) > 1e-9 || Math.abs(dot) > 1e-9)
+      unitTurn[i] = Math.abs(Math.atan2(cross, dot));
+  }
+  const turnAtScale = (i, kk) => {
+    if (i - kk < 0 || i + kk >= n) return 0;
+    const v1x = points[i].x - points[i-kk].x, v1y = points[i].y - points[i-kk].y;
+    const v2x = points[i+kk].x - points[i].x, v2y = points[i+kk].y - points[i].y;
+    const l1 = Math.hypot(v1x, v1y), l2 = Math.hypot(v2x, v2y);
+    if (l1 < 1e-6 || l2 < 1e-6) return 0;
+    return Math.acos(Math.max(-1, Math.min(1, (v1x*v2x + v1y*v2y) / (l1*l2))));
+  };
   const fired = [];
   let lastCorner = -1000;
   for (let i = k; i < n - k; i++) {
     if (turnArr[i] > CORNER_THRESH && i - lastCorner >= k) {
       lastCorner = i;
-      let peak = turnArr[i];
-      for (let j = i + 1; j < Math.min(i + k, n - k); j++) peak = Math.max(peak, turnArr[j]);
-      fired.push([i, peak]);
+      let peak = turnArr[i], peakIdx = i;
+      for (let j = i + 1; j < Math.min(i + k, n - k); j++)
+        if (turnArr[j] > peak) { peak = turnArr[j]; peakIdx = j; }
+      // 端 2k 以内は倍窓が測れない (開いた線の端点は知覚的にも「線の中の角」でない) → 不採用
+      if (peakIdx < 2 * k || peakIdx > n - 1 - 2 * k) continue;
+      const spread = peak > 1e-6 ? turnAtScale(peakIdx, 2 * k) / peak : 9;
+      if (spread > 1.25) continue;                       // 弧に分散 = 滑らかな反転
+      let cIdx = peakIdx;                                // 単位曲率で角の実位置へ局在化
+      for (let j = Math.max(1, peakIdx - k); j <= Math.min(n - 2, peakIdx + k); j++)
+        if (unitTurn[j] > unitTurn[cIdx]) cIdx = j;
+      let si = 0, so = 0;
+      for (let j = Math.max(1, cIdx - 2 * k); j <= Math.min(n - 2, cIdx + 2 * k); j++) {
+        so += unitTurn[j];
+        if (Math.abs(j - cIdx) <= 2) si += unitTurn[j];
+      }
+      if (so > 1e-6 && si / so < 0.6) continue;          // 曲率が局所に集中していない
+      fired.push([peakIdx, peak]);
     }
   }
   if (isClosed) {
@@ -975,10 +1045,38 @@ function strokeComplexity(points, w, h, maxMora = 16) {
       if (t > seamPeak) { seamPeak = t; seamIdx = i; }
     }
     if (seamPeak > CORNER_THRESH && seamPeak <= VERTEX_CAP && seamIdx >= 0) {
+      // P1: seam 候補にも集中度ゲート (wrap 版 share) — ペン下ろし/戻りのもつれ (pigtail) を
+      // 頂点と誤認しない。実頂点 (四角/三角の描き始め) = 転換が一点に集中して通過する。
+      const unitTurnW = (j) => {
+        const jm = ((j - 1) % n + n) % n, jp = (j + 1) % n;
+        const v1x = points[j].x - points[jm].x, v1y = points[j].y - points[jm].y;
+        const v2x = points[jp].x - points[j].x, v2y = points[jp].y - points[j].y;
+        const cross = v1x * v2y - v1y * v2x, dot = v1x * v2x + v1y * v2y;
+        if (Math.abs(cross) <= 1e-9 && Math.abs(dot) <= 1e-9) return 0;
+        return Math.atan2(cross, dot);   // 符号付き (もつれ判定に使う)
+      };
+      let cIdx = seamIdx;
+      for (let off = -k; off <= k; off++) {
+        const j = ((seamIdx + off) % n + n) % n;
+        if (Math.abs(unitTurnW(j)) > Math.abs(unitTurnW(cIdx))) cIdx = j;
+      }
+      let si = 0, so = 0, sSigned = 0;
+      for (let off = -2 * k; off <= 2 * k; off++) {
+        const t = unitTurnW(((cIdx + off) % n + n) % n);
+        so += Math.abs(t); sSigned += t;
+        if (Math.abs(off) <= 2) si += Math.abs(t);
+      }
+      // 実頂点 = 転換が一点に集中し **一方向** に、かつ **最大でも π** で通過する。
+      // ペン下ろし/戻りのもつれは (a) +/− 反転の連続 = 符号付き合計が相殺、または
+      // (b) 小ループの巻き込み = 蓄積転回が π を超える (実測 ~340°)、のどちらかになる。
+      const concentrated = so <= 1e-6
+        || (si / so >= 0.6 && Math.abs(sSigned) / so >= 0.7
+            && Math.abs(sSigned) <= VERTEX_CAP);
       const firstCorner = fired.length ? fired[0][0] : -1000;
       const distLast = seamIdx >= lastCorner ? seamIdx - lastCorner : (n - lastCorner) + seamIdx;
       const distFirst = seamIdx <= firstCorner ? firstCorner - seamIdx : firstCorner + (n - seamIdx);
-      if ((lastCorner < 0 || distLast >= k) && (firstCorner < 0 || distFirst >= k))
+      if (concentrated
+          && (lastCorner < 0 || distLast >= k) && (firstCorner < 0 || distFirst >= k))
         fired.push([seamIdx, seamPeak]);
     }
   }
@@ -2015,7 +2113,9 @@ canvas.addEventListener("pointerup", ev => {
     setSliders(ax);
     // 最新 Core 適応 (2026-07-09): 複雑さ → 語長 / bouba・kiki 大域判定 / 一筆連続=長音 /
     // 構造単位 (ループ≥2 → ループ=音節・つなぎ線=ー,ん,っ,直結)。同じ描写 = 同じ語 (決定的)。
-    const cx = strokeComplexity(inkPts, rect.width, rect.height, 16);
+    // P1: 角検出だけスプライン再構成幾何で行う (珠の継ぎ目の偽の角を除去)。
+    const geomPts = (coarse && stroke.length >= 3) ? splineDensified(stroke, 6) : inkPts;
+    const cx = strokeComplexity(geomPts, rect.width, rect.height, 16);
     let kDraw = drawK(ax.sharp, cx.corners, cx.cornerSharpness);
     if (coarse) kDraw = Math.round(kDraw / 0.125) * 0.125;   // K も同じ格子に
     // manner 次元 (2026-07-10): 描線の動態 → 子音の調音方法の親和。
