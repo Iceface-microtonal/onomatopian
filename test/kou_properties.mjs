@@ -100,8 +100,9 @@ function extractEngine(html) {
 
 const engineSrc = extractEngine(fs.readFileSync(HTML_PATH, "utf8"));
 const EXPORTS = ["extractAxes", "applyHandCorrection", "bucketedAxes", "densified",
-  "strokeComplexity", "drawK", "mannerProfile", "segmentStroke", "unitEligible",
-  "generateFromUnits", "generate", "axesSeed", "mulberry32", "wordK", "romajiOf"];
+  "splineDensified", "strokeComplexity", "drawK", "mannerProfile", "segmentStroke",
+  "unitEligible", "generateFromUnits", "generate", "axesSeed", "mulberry32",
+  "wordK", "romajiOf"];
 const ctx = vm.createContext({ console });
 vm.runInNewContext(
   engineSrc + `\n;globalThis.__api = { ${EXPORTS.join(", ")} };`,
@@ -169,7 +170,9 @@ function replayFromStroke(rec) {
   const raw = api.extractAxes(inkPts, W, H);
   let ax = api.applyHandCorrection(raw, HAND_CORR, false);   // coarse: dampenTexture=false
   ax = api.bucketedAxes(ax, 0.25);
-  const cx = api.strokeComplexity(inkPts, W, H, 16);
+  // P1: 角検出だけスプライン再構成幾何 (pointerup と同じ分岐)
+  const geomPts = beads.length >= 3 ? api.splineDensified(beads, 6) : inkPts;
+  const cx = api.strokeComplexity(geomPts, W, H, 16);
   let kDraw = api.drawK(ax.sharp, cx.corners, cx.cornerSharpness);
   kDraw = Math.round(kDraw / 0.125) * 0.125;
   const seg = api.segmentStroke(inkPts);
@@ -239,11 +242,51 @@ const PROPERTIES = {
   },
 };
 
-// ─── 4. 実行・レポート ───────────────────────────────────────────
+// ─── 4. P1 幾何サニティ (角検出の判別力・regression 扱いで enforce) ─────
+// spec P1 の契約: 偽の角 (滑らかな反転・波のこぶ) が corners に入らないこと +
+// 真の角 (多角形の頂点) が失われないこと。fixture ストローク + 合成図形で固定。
 
 const fixturePath = process.argv[2] ?? DEFAULT_FIXTURE;
 const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf8"));
 const strict = process.env.STRICT === "1";
+const byId = Object.fromEntries(fixture.records.map(r => [r.id, r]));
+
+function cxOfBeads(beads) {
+  const pts = beads.map(([x, y]) => ({ x: x * W, y: y * H }));
+  const geomPts = pts.length >= 3 ? api.splineDensified(pts, 6) : pts;
+  return api.strokeComplexity(geomPts, W, H, 16);
+}
+function cxOfPts(pts) {
+  return api.strokeComplexity(api.splineDensified(pts, 6), W, H, 16);
+}
+const zigzagPts = [];
+for (let i = 0; i <= 6; i++) zigzagPts.push({ x: 40 + i * 45, y: i % 2 === 0 ? 250 : 120 });
+const sinePts = [];
+for (let i = 0; i <= 30; i++) {
+  const t = i / 30;
+  sinePts.push({ x: 30 + t * 300, y: 200 + Math.sin(t * Math.PI * 3) * 70 });
+}
+const GEOM_CHECKS = [
+  ["長方形 #7: 真の角 3 個以上", () => cxOfBeads(byId["mri8a7zz-2"].stroke).corners >= 3],
+  ["長方形 #7: cornerSharpness ≥ 0.1", () => cxOfBeads(byId["mri8a7zz-2"].stroke).cornerSharpness >= 0.1],
+  ["S字 #9: 偽の角 ≤ 1", () => cxOfBeads(byId["mrib3e1u-1"].stroke).corners <= 1],
+  ["3こぶ波 #6: 角 0", () => cxOfBeads(byId["mrgvfeao-4"].stroke).corners === 0],
+  ["双こぶ #4: 谷だけ = 角 1", () => cxOfBeads(byId["mrgv9lk7-5"].stroke).corners === 1],
+  ["丸 #1: 角 0", () => cxOfBeads(byId["mrfxxez7-3"].stroke).corners === 0],
+  ["合成ジグザグ: 角ちょうど 5・cs ≥ 0.3", () => {
+    const cx = cxOfPts(zigzagPts); return cx.corners === 5 && cx.cornerSharpness >= 0.3; }],
+  ["合成正弦波: 角 0", () => cxOfPts(sinePts).corners === 0],
+];
+let geomFail = 0;
+console.log("\nP1 幾何サニティ (角検出の判別力):");
+for (const [label, fn] of GEOM_CHECKS) {
+  let ok = false;
+  try { ok = fn(); } catch { ok = false; }
+  console.log(`  ${ok ? "✅" : "❌"} ${label}`);
+  if (!ok) geomFail++;
+}
+
+// ─── 5. fixture 性質テストの実行・レポート ─────────────────────────
 
 let regressFail = 0, targetFail = 0, targetPass = 0, errors = 0;
 const rows = [];
@@ -291,7 +334,7 @@ for (const [id, tier, words, desc, note] of rows) {
   console.log(`      当時→今日: ${words}`);
   console.log(`      性質: ${desc}\n`);
 }
-console.log(`  regression 破れ: ${regressFail} / target 既知FAIL: ${targetFail} / target 先行達成: ${targetPass} / エラー: ${errors}\n`);
+console.log(`  幾何サニティ破れ: ${geomFail} / regression 破れ: ${regressFail} / target 既知FAIL: ${targetFail} / target 先行達成: ${targetPass} / エラー: ${errors}\n`);
 
-if (regressFail > 0 || errors > 0 || (strict && targetFail > 0)) process.exit(1);
-console.log(strict ? "STRICT: all green ✅" : "regression green ✅ (target は処方 P1〜P7 の進捗指標)");
+if (geomFail > 0 || regressFail > 0 || errors > 0 || (strict && targetFail > 0)) process.exit(1);
+console.log(strict ? "STRICT: all green ✅" : "幾何+regression green ✅ (target は処方 P2〜P7 の進捗指標)");
