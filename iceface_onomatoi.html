@@ -1493,13 +1493,14 @@ function playEvent(event) {
 // buf を [start, start+dur] (ctx 時刻) に 3ms/12ms フェード付きでスケジュール。
 // bufferOffsetSec: buf 内の再生開始位置 (diph の遷移部だけ使う場合など)。
 // (2026-07-11: ループ機構なし — 全モーラが1バッファ1発の素朴なスケジュール)
-function scheduleOne(ctx, buf, start, dur, amplitude, bufferOffsetSec = 0) {
+function scheduleOne(ctx, buf, start, dur, amplitude, bufferOffsetSec = 0,
+                     releaseSec = 0.012) {
   const src = ctx.createBufferSource();
   src.buffer = buf;
   const g = ctx.createGain();
   g.gain.setValueAtTime(0, start);
   g.gain.linearRampToValueAtTime(amplitude, start + 0.003);
-  g.gain.setValueAtTime(amplitude, start + Math.max(0.003, dur - 0.012));
+  g.gain.setValueAtTime(amplitude, start + Math.max(0.003, dur - releaseSec));
   g.gain.linearRampToValueAtTime(0, start + dur);
   src.connect(g).connect(ctx.destination);
   src.start(start, bufferOffsetSec);
@@ -1523,8 +1524,11 @@ function scheduleEvent(ctx, event) {
     if (p.kind === "contN") {
       // 継続撥音: 直前母音から続けて v_<v>_nn を preRoll ぶん早めに立ち上げる
       // (前モーラの自然な減衰と時間的に重なる = 先行オーバーラップ)。無ければ通常の ん。
+      // 2026-07-14: 窓をバッファ実長でクランプ — 短いテイク (v_i_nn=0.26s < 窓0.35s) は
+      // 正規化ランプの終端がぶつ切りになり「持ち上がって低くサッと切れる」音が出ていた。
       const buf = contNBufferFor(moras[p.prevIndex].nucleus);
-      if (buf) scheduleOne(ctx, buf, t - preRollSec, moraSec + preRollSec, m.amplitude);
+      if (buf) scheduleOne(ctx, buf, t - preRollSec,
+                           Math.min(moraSec + preRollSec, buf.duration), m.amplitude);
       else { const nb = bufferFor(m); if (nb) scheduleOne(ctx, nb, t, moraSec, m.amplitude); }
     } else if (p.kind === "diphPartner") {
       // CV→V 連続母音 (かい/こう): diph_<v1><v2> の「2 母音目への遷移部」だけを使う
@@ -1534,7 +1538,12 @@ function scheduleEvent(ctx, event) {
       if (buf) scheduleOne(ctx, buf, t, moraSec, m.amplitude, offset);
     } else {
       const buf = bufferFor(m);
-      if (buf) scheduleOne(ctx, buf, t, moraSec, m.amplitude);
+      // 次モーラが contN (ん の先行オーバーラップ) なら、この母音はオーバーラップ区間
+      // (preRoll) をかけてフェードアウト = native の cos/sin クロスフェード相当。
+      // 全音量のまま重ねると「i と in が重なり気味」のダブりに聴こえる (2026-07-14)。
+      const nextContN = i + 1 < moras.length && plan[i + 1] && plan[i + 1].kind === "contN";
+      if (buf) scheduleOne(ctx, buf, t, moraSec, m.amplitude, 0,
+                           nextContN ? preRollSec : 0.012);
     }
     t += moraSec;
   }

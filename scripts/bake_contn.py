@@ -149,6 +149,16 @@ if __name__ == "__main__":
                             "-ac", "1", "-sample_fmt", "s16", s16], check=True)
             a, sr = load_wav16(s16)
             prepared, meta = prepare_contn(a, sr, return_meta=True)
+            # web 配信用の末尾フェード (60ms cos²): native は再生側の包絡がテイク終端を
+            # 覆うが、web は正規化ランプ (-17.5dBFS まで持ち上げ) の終端がそのまま
+            # ぶつ切りになる (短い i テイクで「リバース状に持ち上がって切れる」報告
+            # 2026-07-14)。ベイクで終端を無音へ着地させる。
+            import math as _math
+            fade_n = min(len(prepared), int(sr * 0.060))
+            for j in range(fade_n):
+                t = (j + 1) / fade_n                      # 0→1 (終端で1)
+                g = _math.cos(t * _math.pi / 2) ** 2      # 1→0
+                prepared[len(prepared) - fade_n + j] *= g
             baked = os.path.join(td, "baked.wav")
             save_wav16(baked, prepared, sr)
             dst = os.path.join(OUT, f"v_{v}_nn.mp3")
