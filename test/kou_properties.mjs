@@ -240,6 +240,25 @@ const PROPERTIES = {
     desc: "破裂音を含まず、清音摩擦 (s/sh/f/h) で始まる",
     check: ev => !hasOnset(ev, PLOSIVE) && VOICELESS_FRIC.has(onsets(ev)[0]),
   },
+  // ─── 第2ラウンド (2026-07-14・P1配備後): 幾何は正常化・残るは選択層 ───
+  "mrkopj63-1": {  // 大きな四角 → bun 👎 (破裂音は出た・母音が課題)
+    desc: "破裂音を維持しつつ、開放の大四角は母音 a 主体 (P9 母音の意味論: あ=開放・拡張)",
+    check: ev => hasOnset(ev, PLOSIVE)
+      && nuclei(ev).filter(v => v === "a").length >= nuclei(ev).length / 2,
+  },
+  "mrkoxd9n-1": {  // 鋭いジグザグ → gyapeen 👍
+    desc: "鋭形に破裂音を含む (P1+manner の成功動作を回帰固定)",
+    check: ev => hasOnset(ev, PLOSIVE),
+  },
+  "mrkoztb2-1": {  // 3連アーチ → gyuuuu 👎 (拗音+う には到達・濁音が違反)
+    desc: "濁阻害音 (g/gy/z/j/d/b) を onset に使わない (P4: 第1回#6「濁音でない拗音+う」)",
+    check: ev => !hasOnset(ev, new Set(["g", "gy", "z", "j", "d", "b"])),
+  },
+  "mrkp33vp-4": {  // 閉じた丸 → noooo 👍 (「最後は n でも良いかも」は任意メモ)
+    desc: "破裂音・歯茎硬口蓋なし + 共鳴音 onset (丸の成功動作を回帰固定)",
+    check: ev => !hasOnset(ev, PLOSIVE) && !hasOnset(ev, ALVEOLO_PALATAL)
+      && ["n", "ny", "m", "w", "y", "r"].includes(onsets(ev)[0]),
+  },
 };
 
 // ─── 4. P1 幾何サニティ (角検出の判別力・regression 扱いで enforce) ─────
