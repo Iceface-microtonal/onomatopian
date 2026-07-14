@@ -1341,6 +1341,16 @@ function trimLeadingSilence(buf) {
 const CONTN_VOWELS = VOWELS;
 const CONTN_FALLBACK = { a: "v_a_N" };   // v_a_nn が無ければ v_a_N を同じキーで使う
 const DIPH_PAIRS = ["ai", "au", "ei", "oi", "ou"];
+// CV→V (こう/かい/せい…) 専用の拡張録音 (2026-07-14: native ConsonantSampleBank の
+// cvDiph 移植)。native は 2026-07-06 に「生 diph の末尾から逆算」方式を明示的に廃止
+// している (実音は前半 ~400ms のみ・末尾は減衰+無音のため、ほぼ無音を再生していた —
+// FormantSynth.diphContext のコメント参照)。web の旧 diphPartner はこの**廃止された
+// 方式**を独自に再実装してしまっていた (higyau で「あう」の a が浮いて千切れる、
+// 等の症状はこれが根)。native と同じく、CV→V は「v1 を保持したまま v2 へ移る」
+// 専用の拡張録音 (diph_aaii 等) を先行オーバーラップで読む。(a,u) ペアは native 側にも
+// 拡張録音が無いため、この機構は使わず**素の母音として発声**する (native の現状の
+// 挙動と同じ・虚偽の継続をしない方が正直)。
+const CV_DIPH_EXT_PAIRS = ["ai", "ei", "oi", "ou"];   // au は native にも拡張録音が無い
 
 function sampleKeys() {
   const keys = [];
@@ -1354,6 +1364,7 @@ function sampleKeys() {
   keys.push("n_N");
   for (const v of CONTN_VOWELS) keys.push("v_" + v + "_nn");
   for (const p of DIPH_PAIRS) keys.push("diph_" + p);
+  for (const p of CV_DIPH_EXT_PAIRS) keys.push("diph_" + p[0] + p[0] + p[1] + p[1]);
   return keys;
 }
 // key に対応する実ファイル名の候補列 (先頭から順に fetch を試す)。通常は [key] のみ。
@@ -1366,6 +1377,10 @@ function sampleUrlCandidates(key) {
   // (2026-07-11 v3: 母音単独の持続テイク優先 [v_aaaa 等] は撤回 — 延長機構の廃止で
   //  各モーラが個別に鳴る方式に戻ったため、1モーラ向けの自然な attack/decay を持つ
   //  短い v_<v> テイクをそのまま使うのが正しい)
+  // 2026-07-14: native 資産の命名タイポ救済 (diph_aaii → 実ファイルは diph_aaiiwav.wav)。
+  // v_iiiiwav.wav 事故と同型の反復パターン — web 用 mp3 は正しい名で変換済みだが、
+  // dev コピー (native Resources を直参照) はタイポ済み実ファイルに当たる。
+  if (key.startsWith("diph_")) return [key, key + "wav"];
   return [key];
 }
 // Phase 1: fetch (gesture 不要なのでページロード直後に並列で始める)
@@ -1429,7 +1444,14 @@ function bufferFor(mora) {
   return sampleBank.get("cv_" + mora.onset + "a") ?? null;   // /a/ フォールバック
 }
 function contNBufferFor(vowel) { return sampleBank.get("v_" + vowel + "_nn") ?? null; }
+// 裸の v1v2 遷移だけの短い収録。CV→V (higyau 等) にはもう使わない (2026-07-14 —
+// この offset 再利用は native が 2026-07-06 に廃止した手法だった)。現状未使用だが
+// 資産としては維持 (将来の裸母音連続 = native の vvDiphPart1Takes 相当の実装候補)。
 function diphBufferFor(v1, v2) { return sampleBank.get("diph_" + v1 + v2) ?? null; }
+// CV→V 専用拡張録音 (diph_aaii 等・2026-07-14)。v1 を保持したまま v2 へ移る一続きの
+// 収録なので、diphBufferFor (裸の v1v2 遷移だけの短い収録) と違い先行オーバーラップで
+// 再アタック無しに読める (native の cvDiphSample と対)。
+function cvDiphExtBufferFor(v1, v2) { return sampleBank.get("diph_" + v1 + v1 + v2 + v2) ?? null; }
 
 // ─── モーラ列を走査し、通常再生ではカバーできない2パターンを検出する。
 // (FormantSynth の continuationNVowel / cvDiphPrev の移植・簡易版)
@@ -1451,8 +1473,14 @@ function analyzeMoras(moras) {
       continue;
     }
     if (i > 0 && m.onset === null && moras[i - 1].onset !== null && !moras[i - 1].isN &&
-        moras[i - 1].nucleus !== m.nucleus && diphBufferFor(moras[i - 1].nucleus, m.nucleus)) {
-      plan[i] = { kind: "diphPartner", v1: moras[i - 1].nucleus, v2: m.nucleus };
+        moras[i - 1].nucleus !== m.nucleus) {
+      const v1 = moras[i - 1].nucleus, v2 = m.nucleus;
+      // 2026-07-14: CV→V (higyau の gya→u 等) は拡張録音 (diph_aaii 等) があれば
+      // それを先行オーバーラップで使う。無いペア (a,u — native にも拡張録音が無い)
+      // は「素の母音として発声」に倒す — 旧 diphPartner (裸の diph_au.wav を
+      // オフセット+moraSec で無理に再利用) は native が 2026-07-06 に明示的に
+      // 廃止した手法の独自再実装で、「a が浮いて千切れる」症状の根だった。
+      if (cvDiphExtBufferFor(v1, v2)) plan[i] = { kind: "cvDiphExt", v1, v2, prevIndex: i - 1 };
     }
   }
   return plan;
@@ -1530,20 +1558,25 @@ function scheduleEvent(ctx, event) {
       if (buf) scheduleOne(ctx, buf, t - preRollSec,
                            Math.min(moraSec + preRollSec, buf.duration), m.amplitude);
       else { const nb = bufferFor(m); if (nb) scheduleOne(ctx, nb, t, moraSec, m.amplitude); }
-    } else if (p.kind === "diphPartner") {
-      // CV→V 連続母音 (かい/こう): diph_<v1><v2> の「2 母音目への遷移部」だけを使う
-      // (先頭の v1 部分は直前 CV モーラが既に鳴らしているため、頭からは再生しない)。
-      const buf = diphBufferFor(p.v1, p.v2);
-      const offset = buf ? Math.min(0.12, buf.duration * 0.4) : 0;
-      if (buf) scheduleOne(ctx, buf, t, moraSec, m.amplitude, offset);
+    } else if (p.kind === "cvDiphExt") {
+      // CV→V 連続母音 (かい/こう等): v1 を保持したまま v2 へ移る拡張録音
+      // (diph_aaii 等) を、直前 CV モーラと同じ preRoll 先行オーバーラップで読む
+      // (native cvDiphSample + 先行オーバーラップの移植)。バッファの頭は既に v1
+      // そのものの立ち上がり (leading silence trim 済) — 直前 CV の減衰と重ねて
+      // 鳴らすことで再アタック無しに繋がる (contN と同じ様式)。
+      const buf = cvDiphExtBufferFor(p.v1, p.v2);
+      if (buf) scheduleOne(ctx, buf, t - preRollSec,
+                           Math.min(moraSec + preRollSec, buf.duration), m.amplitude);
     } else {
       const buf = bufferFor(m);
-      // 次モーラが contN (ん の先行オーバーラップ) なら、この母音はオーバーラップ区間
-      // (preRoll) をかけてフェードアウト = native の cos/sin クロスフェード相当。
-      // 全音量のまま重ねると「i と in が重なり気味」のダブりに聴こえる (2026-07-14)。
-      const nextContN = i + 1 < moras.length && plan[i + 1] && plan[i + 1].kind === "contN";
+      // 次モーラが contN / cvDiphExt (先行オーバーラップで重なる) なら、この母音は
+      // オーバーラップ区間 (preRoll) をかけてフェードアウト = native の cos/sin
+      // クロスフェード相当。全音量のまま重ねると二重発声のダブりに聴こえる
+      // (2026-07-14: i+in / gya+diphExt で確認)。
+      const next = i + 1 < moras.length ? plan[i + 1] : null;
+      const nextOverlaps = next && (next.kind === "contN" || next.kind === "cvDiphExt");
       if (buf) scheduleOne(ctx, buf, t, moraSec, m.amplitude, 0,
-                           nextContN ? preRollSec : 0.012);
+                           nextOverlaps ? preRollSec : 0.012);
     }
     t += moraSec;
   }
