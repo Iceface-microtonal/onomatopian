@@ -375,7 +375,13 @@ function drawK(sharp, corners, cornerSharpness = null) {
 const MANNER_CLASS = { k:"p", g:"p", t:"p", d:"p", p:"p", b:"p", ky:"p", gy:"p",
                        ts:"a", ch:"a", j:"a",
                        s:"f", sh:"f", z:"f", h:"f", f:"f",
-                       m:"s", n:"s", ny:"s", r:"s", w:"s", y:"s" };
+                       m:"s", n:"s", r:"s", w:"s",
+                       // P6 (2026-07-15, コウさん立法 #いいい/うーの直線): 拗音/半母音 y/ny は
+                       // 「うねり」(実際の曲がり運動) の証拠が要る。旧classは"s"=鈍さ(-sharp)
+                       // だけで m/n/r/w と同格に加点され、直線 (tex負, うねり無) でも y/ny が
+                       // 選ばれて restrict{a,u,o} が母音の い 証拠を握り潰していた (横一本線が
+                       // yuu/yaa になる不具合)。"f"=wavy (tex由来) に繋ぎ替え、曲線の実在を要求。
+                       ny:"f", y:"f" };
 const MANNER_WEIGHT = 0.8;
 // ─── P2 調音位置 (2026-07-15, Jakobson grave/acute): 描線の丸↔尖 ↔ 子音の調音位置 ───
 // コウさん立法 (#2 joooo / #4 gyagigyogo / #7 jon): 丸に歯茎硬口蓋 (j/sh/ch) や拗音は

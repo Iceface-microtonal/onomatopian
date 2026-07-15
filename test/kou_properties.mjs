@@ -348,6 +348,56 @@ for (const [label, fn] of GEOM_CHECKS) {
   if (!ok) geomFail++;
 }
 
+// ─── 4.5 P6 拗音ゲートサニティ (2026-07-15・regression 扱いで enforce) ───────
+// Icefaceさん報告: 「横一本線が yuu/yaa になる。口は閉じておらず、いいい に近い
+// 印象になるはず」。原因 = mannerProfile の "s"(共鳴音) 類が -sharp (鈍さ) だけで
+// 加点され、y/ny (拗音・半母音=グライド) が m/n/r/w と同格に選ばれてしまい、
+// restrict{a,u,o} が口の形から導いた い の証拠を握り潰していた。
+// 修正: y/ny の manner を "s" → "f"(wavy=tex 由来のうねり) へ繋ぎ替え、実際の
+// 曲がり運動がない直線では加点されないようにした (MANNER_CLASS 定義)。
+// 決定的 RNG (axesSeed/mulberry32) なので N 試行の内訳は再実行しても不変 — 閾値は
+// 実測値 (修正前 453/1000, 修正後 149/1000 など) に安全マージンを取って固定。
+function tallyOnsets(pts, N) {
+  const inkPts = api.densified(pts, 6);
+  const raw = api.extractAxes(inkPts, W, H);
+  const ax = api.applyHandCorrection(raw, HAND_CORR, true);
+  const geomPts = api.splineDensified(pts, 6);
+  const cx = api.strokeComplexity(geomPts, W, H, 16);
+  const kDraw = api.drawK(ax.sharp, cx.corners, cx.cornerSharpness);
+  const manner = api.mannerProfile(ax.sharp, cx.corners, cx.cornerSharpness, ax.tex, cx.loops);
+  let ynyCount = 0, pureVowelCount = 0;
+  for (let seed = 0; seed < N; seed++) {
+    const rand = api.mulberry32(api.axesSeed(ax, seed));
+    const ev = api.generate(ax, rand, 0.4, { kiki: kDraw, manner });
+    if (ev.moras.some(m => m.onset === "y" || m.onset === "ny")) ynyCount++;
+    if (ev.moras.every(m => m.onset === null)) pureVowelCount++;
+  }
+  return { ynyCount, pureVowelCount };
+}
+const straightHPts = [];
+for (let i = 0; i <= 40; i++) straightHPts.push({ x: 60 + i * 6, y: 180 });
+const straightVPts = [];
+for (let i = 0; i <= 40; i++) straightVPts.push({ x: 180, y: 60 + i * 6 });
+const P6_N = 1000;
+const p6H = tallyOnsets(straightHPts, P6_N);
+const p6V = tallyOnsets(straightVPts, P6_N);
+const P6_CHECKS = [
+  [`横一本線: y/ny onset 率 ≤ 25% (実測 ${p6H.ynyCount}/${P6_N})`,
+    () => p6H.ynyCount <= P6_N * 0.25],
+  [`横一本線: 母音のみ (い系寄り) 率 ≥ 10% (実測 ${p6H.pureVowelCount}/${P6_N})`,
+    () => p6H.pureVowelCount >= P6_N * 0.10],
+  [`縦一本線: y/ny onset 率 ≤ 10% (実測 ${p6V.ynyCount}/${P6_N})`,
+    () => p6V.ynyCount <= P6_N * 0.10],
+];
+let p6Fail = 0;
+console.log("\nP6 拗音ゲートサニティ (直線に y/ny が乗って母音の証拠を握り潰さないこと):");
+for (const [label, fn] of P6_CHECKS) {
+  let ok = false;
+  try { ok = fn(); } catch { ok = false; }
+  console.log(`  ${ok ? "✅" : "❌"} ${label}`);
+  if (!ok) p6Fail++;
+}
+
 // ─── 5. fixture 性質テストの実行・レポート ─────────────────────────
 
 let regressFail = 0, targetFail = 0, targetPass = 0, errors = 0;
@@ -398,7 +448,7 @@ for (const [id, tier, words, desc, note] of rows) {
   console.log(`      当時→今日: ${words}`);
   console.log(`      性質: ${desc}\n`);
 }
-console.log(`  幾何サニティ破れ: ${geomFail} / regression 破れ: ${regressFail} / target 既知FAIL: ${targetFail} / target 先行達成: ${targetPass} / エラー: ${errors}\n`);
+console.log(`  幾何サニティ破れ: ${geomFail} / P6拗音ゲート破れ: ${p6Fail} / regression 破れ: ${regressFail} / target 既知FAIL: ${targetFail} / target 先行達成: ${targetPass} / エラー: ${errors}\n`);
 
-if (geomFail > 0 || regressFail > 0 || errors > 0 || (strict && targetFail > 0)) process.exit(1);
+if (geomFail > 0 || p6Fail > 0 || regressFail > 0 || errors > 0 || (strict && targetFail > 0)) process.exit(1);
 console.log(strict ? "STRICT: all green ✅" : "幾何+regression green ✅ (target は処方 P2〜P7 の進捗指標)");
