@@ -102,7 +102,7 @@ const engineSrc = extractEngine(fs.readFileSync(HTML_PATH, "utf8"));
 const EXPORTS = ["extractAxes", "applyHandCorrection", "bucketedAxes", "densified",
   "splineDensified", "strokeComplexity", "drawK", "mannerProfile", "segmentStroke",
   "unitEligible", "generateFromUnits", "generate", "axesSeed", "mulberry32",
-  "wordK", "romajiOf"];
+  "wordK", "romajiOf", "openArcSignal", "openChevronSignal"];
 const ctx = vm.createContext({ console });
 vm.runInNewContext(
   engineSrc + `\n;globalThis.__api = { ${EXPORTS.join(", ")} };`,
@@ -398,6 +398,88 @@ for (const [label, fn] of P6_CHECKS) {
   if (!ok) p6Fail++;
 }
 
+// ─── 4.6 P11 記号語彙サニティ (2026-07-15・regression 扱いで enforce) ───────
+// Icefaceさん発案: ⊃⊂∩∪ (開いた弧) → 母音+ん / ＜＞∧∨ (開いた一角) → 子音+ん。
+// round/open (口の形) や brightness は描線の向きに依存するため使わず、corners/
+// cornerSharpness/isClosed/rotationFraction/curveConsistency (向き不変な形の特徴)
+// だけで判定する (MANNER_CLASS 同様 web を判定正本として先に固定・Core は後追い)。
+function p11PipelineTally(pts, N) {
+  const inkPts = api.densified(pts, 6);
+  const raw = api.extractAxes(inkPts, W, H);
+  const ax = api.applyHandCorrection(raw, HAND_CORR, true);
+  const geomPts = pts.length >= 3 ? api.splineDensified(pts, 6) : inkPts;
+  const cx = api.strokeComplexity(geomPts, W, H, 16);
+  const kDraw = api.drawK(ax.sharp, cx.corners, cx.cornerSharpness);
+  const manner = api.mannerProfile(ax.sharp, cx.corners, cx.cornerSharpness, ax.tex, cx.loops);
+  const openArc = api.openArcSignal(cx), openChevron = api.openChevronSignal(cx);
+  let nilOnsetFirst = 0, consOnsetFirst = 0, endsWithN = 0;
+  for (let seed = 0; seed < N; seed++) {
+    const rand = api.mulberry32(api.axesSeed(ax, seed));
+    const ev = api.generate(ax, rand, 0.4, {
+      moraCountOverride: (openArc || openChevron) ? 1 : cx.moraCount,
+      kiki: kDraw, manner, lengthHint: cx.moraCount,
+      forceNilOnset: openArc, forceConsonantOnset: openChevron,
+    });
+    if (ev.moras[0].onset === null) nilOnsetFirst++; else consOnsetFirst++;
+    if (ev.moras[ev.moras.length - 1].isN) endsWithN++;
+  }
+  return { cx, openArc, openChevron, nilOnsetFirst, consOnsetFirst, endsWithN };
+}
+function arcPts(sweepDeg, rotateDeg) {
+  const pts = [], r = 90, sweep = sweepDeg * Math.PI / 180, rot = rotateDeg * Math.PI / 180;
+  const start = -sweep / 2 + rot;
+  for (let i = 0; i <= 40; i++) {
+    const ang = start + (i / 40) * sweep;
+    pts.push({ x: 180 + r * Math.cos(ang), y: 180 + r * Math.sin(ang) });
+  }
+  return pts;
+}
+function chevronPts(apexDeg) {
+  const half = (apexDeg / 2) * Math.PI / 180, legLen = 150, apex = { x: 180, y: 250 };
+  const dir1 = { x: -Math.sin(half), y: -Math.cos(half) }, dir2 = { x: Math.sin(half), y: -Math.cos(half) };
+  const pts = [];
+  for (let i = 20; i >= 0; i--) { const t = i / 20; pts.push({ x: apex.x + dir1.x * legLen * t, y: apex.y + dir1.y * legLen * t }); }
+  for (let i = 1; i <= 20; i++) { const t = i / 20; pts.push({ x: apex.x + dir2.x * legLen * t, y: apex.y + dir2.y * legLen * t }); }
+  return pts;
+}
+const P11_N = 300;
+const arcRotations = [0, 90, 180, 270].map(rot => p11PipelineTally(arcPts(200, rot), P11_N));
+const chevronVariants = [30, 60].map(deg => p11PipelineTally(chevronPts(deg), P11_N));
+const P11_CHECKS = [
+  ["開いた弧 (4方向) は全て openArc 判定になる",
+    () => arcRotations.every(r => r.openArc)],
+  ["開いた弧: 全方向で onset なし (母音のみ) が支配的 (100%)",
+    () => arcRotations.every(r => r.nilOnsetFirst === P11_N)],
+  ["開いた弧: 全方向で語末んを保つ (100%)",
+    () => arcRotations.every(r => r.endsWithN === P11_N)],
+  ["開いた一角 (2種) は全て openChevron 判定になる",
+    () => chevronVariants.every(r => r.openChevron)],
+  ["開いた一角: 子音 onset が支配的 (100%)",
+    () => chevronVariants.every(r => r.consOnsetFirst === P11_N)],
+  ["開いた一角: 語末んを保つ (100%)",
+    () => chevronVariants.every(r => r.endsWithN === P11_N)],
+  ["丸 #1 (閉じた円) は openArc/openChevron どちらにもならない (既存の丸ん等を壊さない)",
+    () => { const cx = cxOfBeads(byId["mrfxxez7-3"].stroke);
+            return !api.openArcSignal(cx) && !api.openChevronSignal(cx); }],
+  ["双こぶ #4 (ループ2) は openArc/openChevron どちらにもならない",
+    () => { const cx = cxOfBeads(byId["mrgv9lk7-5"].stroke);
+            return !api.openArcSignal(cx) && !api.openChevronSignal(cx); }],
+  ["合成正弦波 (相殺した回転) は openArc にならない (curveConsistency ゲート)",
+    () => !api.openArcSignal(cxOfPts(sinePts))],
+  ["合成ジグザグ (角5個) は openArc/openChevron どちらにもならない",
+    () => { const cx = cxOfPts(zigzagPts); return !api.openArcSignal(cx) && !api.openChevronSignal(cx); }],
+  ["横一本線 (P6 対象) は openArc/openChevron どちらにもならない",
+    () => { const cx = cxOfPts(straightHPts); return !api.openArcSignal(cx) && !api.openChevronSignal(cx); }],
+];
+let p11Fail = 0;
+console.log("\nP11 記号語彙サニティ (⊃⊂∩∪→母音+ん・＜＞∧∨→子音+ん、向き不問・既存形は誤爆しない):");
+for (const [label, fn] of P11_CHECKS) {
+  let ok = false;
+  try { ok = fn(); } catch { ok = false; }
+  console.log(`  ${ok ? "✅" : "❌"} ${label}`);
+  if (!ok) p11Fail++;
+}
+
 // ─── 5. fixture 性質テストの実行・レポート ─────────────────────────
 
 let regressFail = 0, targetFail = 0, targetPass = 0, errors = 0;
@@ -448,7 +530,7 @@ for (const [id, tier, words, desc, note] of rows) {
   console.log(`      当時→今日: ${words}`);
   console.log(`      性質: ${desc}\n`);
 }
-console.log(`  幾何サニティ破れ: ${geomFail} / P6拗音ゲート破れ: ${p6Fail} / regression 破れ: ${regressFail} / target 既知FAIL: ${targetFail} / target 先行達成: ${targetPass} / エラー: ${errors}\n`);
+console.log(`  幾何サニティ破れ: ${geomFail} / P6拗音ゲート破れ: ${p6Fail} / P11記号語彙破れ: ${p11Fail} / regression 破れ: ${regressFail} / target 既知FAIL: ${targetFail} / target 先行達成: ${targetPass} / エラー: ${errors}\n`);
 
-if (geomFail > 0 || p6Fail > 0 || regressFail > 0 || errors > 0 || (strict && targetFail > 0)) process.exit(1);
+if (geomFail > 0 || p6Fail > 0 || p11Fail > 0 || regressFail > 0 || errors > 0 || (strict && targetFail > 0)) process.exit(1);
 console.log(strict ? "STRICT: all green ✅" : "幾何+regression green ✅ (target は処方 P2〜P7 の進捗指標)");
