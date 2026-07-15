@@ -260,8 +260,25 @@ const PROPERTIES = {
       && ["n", "ny", "m", "w", "y", "r"].includes(onsets(ev)[0]),
   },
   // ─── 第3ラウンド (2026-07-15): i の統語論 (位置文法) ───
-  // ※ mrlacsw0-1 (dizidozo 👎) は理由文が 200 字上限で切断され立法内容が不完全
-  //   → 意図的に未登録 (捏造しない)。fb 上限を 500 字へ拡大済・コウさん再送待ち。
+  "mrlacsw0-1": {  // 鋭ジグザグ → dizidozo 👎 (全文受領で立法完成・提案語 digaziba)
+    // P10 言いやすさの制約: 「続くと言いづらい言葉は、定着しにくい」。
+    // di→zi (歯茎→歯茎×同母音i) が違反、digaziba (d歯茎→g軟口蓋→z歯茎→b唇 ×
+    // i-a-i-a 交替) が模範。gibiin (gi軟口蓋→bi唇) が 👍 だった謎もこれで解ける。
+    // 音韻論の OCP (必異原理) と同型 = [普遍] の裏付けを持つ [慣習] 立法。
+    desc: "P10 言いやすさ: 隣接 CV モーラが 同母音×同調音位置 を繰り返さない",
+    check: ev => {
+      const PLACE = { p: "lab", b: "lab", m: "lab", f: "lab", w: "lab", my: "lab",
+                      t: "alv", d: "alv", s: "alv", z: "alv", n: "alv", r: "alv", ts: "alv",
+                      sh: "pal", j: "pal", ch: "pal", y: "pal", ny: "pal",
+                      k: "vel", g: "vel", ky: "vel", gy: "vel", h: "glo" };
+      for (let i = 1; i < ev.moras.length; i++) {
+        const a = ev.moras[i - 1], b = ev.moras[i];
+        if (a.onset && b.onset && !a.isN && !b.isN
+            && a.nucleus === b.nucleus && PLACE[a.onset] === PLACE[b.onset]) return false;
+      }
+      return true;
+    },
+  },
   "mrlb56vr-1": {  // ジグザグ+終端カーブ → gibiin 👍「最後の曲線に いいん は非常に良い」
     desc: "鋭形+終端カーブ: 語末は 伸ばした i + ん の着地を保つ (P9 実地承認の回帰固定)",
     check: ev => endsWithN(ev)
