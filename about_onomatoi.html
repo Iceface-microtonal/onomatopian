@@ -114,7 +114,12 @@
   <p>
     前者は「この形は、大きいか小さいか・丸いか鋭いか・滑らかか反復的か・明るいか暗いか」を読む。
     後者は「この形を口にするなら、唇は横に開くかすぼむか・口は大きく開くか閉じるか」を読む。
-    丸→あ、横棒→い、小円→う、横長の楕円→え —— <strong>母音は口の形が決めます</strong>。
+    丸→あ、横棒→い、小円→う、斜めに伸びた楕円→え (傾きの向きは問いません)、
+    少し縦長の丸→お —— <strong>母音は口の形が決めます</strong>。
+  </p>
+  <p>
+    開いた弧 (<code>⊃⊂∩∪</code> のような形) を描くと「母音+ん」、開いた一角
+    (<code>＜＞∧∨</code> のような形) を描くと「子音+ん」の最小の語になります (向きは問いません)。
   </p>
   <p>
     この 6 軸が、各子音・母音に与えられた音象徴バイアス表と照合され、
@@ -138,11 +143,13 @@
     Onomatoi は iPad/Mac アプリ <em>Onomatoi (旧 Iceface PTS, Phonosymbolic Topology Synthesizer)</em>
     の簡易 Web 版です。本体にはピッチ変化・旋律 (わらべうた) モード・
     複数ストロークの作曲モードなどがあります。
-    声は Edge TTS 由来の収録サンプル <strong>PuppeTwin</strong> (107 ファイル) を使用しています。
+    声は Edge TTS 由来の収録サンプル <strong>PuppeTwin</strong> (127 ファイル) を使用しています。
   </p>
   <p>
-    2026-07-08: 本体コアの v7 更新 (実在オノマトペ型への整形/長母音サステイン/継続撥音/
-    連続母音かい・こう) をこの Web 版にも移植しました。
+    本体コアからの移植 (実在オノマトペ型への整形/長母音サステイン/継続撥音/連続母音かい・こう)
+    に加え、口の形から母音を選ぶしくみ (斜めの楕円→え、少し縦長の丸→お を含む)・
+    開いた弧や開いた一角が「母音+ん」「子音+ん」になるしくみ・拗音や隣り合うモーラの
+    言いやすさの調整などを、この Web 版にも継続して反映しています。
     2026-06-22 までの旧バージョンは <a href="./iceface_onomatopian.html">こちら</a> に保存してあります。
   </p>
 
@@ -206,8 +213,14 @@
   <p>
     The first four read what the shape <em>means</em>; the last two read what mouth it
     <em>would take to say it</em>. A circle → <em>a</em>, a horizontal bar → <em>i</em>,
-    a small circle → <em>u</em>, a wide ellipse → <em>e</em> —
+    a small circle → <em>u</em>, a tilted ellipse → <em>e</em> (either direction of tilt),
+    a slightly tall circle → <em>o</em> —
     <strong>vowels are chosen by the mouth</strong>.
+  </p>
+  <p>
+    Draw an open arc (shapes like <code>⊃⊂∩∪</code>) and it becomes a minimal
+    "vowel + ん" word; draw an open angle (shapes like <code>＜＞∧∨</code>) and it
+    becomes a minimal "consonant + ん" word — either way, regardless of orientation.
   </p>
   <p>
     These six axes are matched against sound-symbolic bias tables for every consonant and
@@ -233,13 +246,16 @@
     Onomatoi is the simplified web edition of the iPad/Mac app
     <em>Onomatoi (formerly Iceface PTS, Phonosymbolic Topology Synthesizer)</em>, which adds
     pitch contours, melody (warabe-uta) modes and a multi-stroke composing mode.
-    The voice is <strong>PuppeTwin</strong>, a bank of 107 recorded samples.
+    The voice is <strong>PuppeTwin</strong>, a bank of 127 recorded samples.
   </p>
   <p>
-    2026-07-08: ported the core's v7 update (shaping into real-sounding onomatopoeia forms,
-    sustained long vowels, continuation-ん, and vowel glides like <em>kai/kou</em>) into this
-    web version. The version through 2026-06-22 is preserved
-    <a href="./iceface_onomatopian.html">here</a>.
+    Alongside the port from the core engine (shaping into real-sounding onomatopoeia forms,
+    sustained long vowels, continuation-ん, and vowel glides like <em>kai/kou</em>), this web
+    version keeps in step with ongoing refinements to the core: choosing vowels from the shape
+    of the mouth (including tilted ellipses → <em>e</em> and slightly-tall circles → <em>o</em>),
+    open arcs/angles becoming minimal "vowel/consonant + ん" words, and adjustments to glides
+    and to how neighboring morae stay easy to say.
+    The version through 2026-06-22 is preserved <a href="./iceface_onomatopian.html">here</a>.
   </p>
 
   <h2>Feedback &amp; data use</h2>
