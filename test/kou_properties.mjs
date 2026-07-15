@@ -259,6 +259,18 @@ const PROPERTIES = {
     check: ev => !hasOnset(ev, PLOSIVE) && !hasOnset(ev, ALVEOLO_PALATAL)
       && ["n", "ny", "m", "w", "y", "r"].includes(onsets(ev)[0]),
   },
+  // ─── 第3ラウンド (2026-07-15): i の統語論 (位置文法) ───
+  // ※ mrlacsw0-1 (dizidozo 👎) は理由文が 200 字上限で切断され立法内容が不完全
+  //   → 意図的に未登録 (捏造しない)。fb 上限を 500 字へ拡大済・コウさん再送待ち。
+  "mrlb56vr-1": {  // ジグザグ+終端カーブ → gibiin 👍「最後の曲線に いいん は非常に良い」
+    desc: "鋭形+終端カーブ: 語末は 伸ばした i + ん の着地を保つ (P9 実地承認の回帰固定)",
+    check: ev => endsWithN(ev)
+      && ev.moras.some(m => m.onset === null && !m.isN && m.nucleus === "i"),
+  },
+  "mrlbrr6f-1": {  // 3連アーチ → bigibogo 👎「丸始まりに語頭 i は不適・a/u/o で始めよ」
+    desc: "丸みから始まる描線: 先頭モーラの母音は a/u/o (語中の i 焦点化は可)",
+    check: ev => ["a", "u", "o"].includes(nuclei(ev)[0]),
+  },
 };
 
 // ─── 4. P1 幾何サニティ (角検出の判別力・regression 扱いで enforce) ─────

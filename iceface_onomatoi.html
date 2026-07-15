@@ -116,7 +116,7 @@
     <span class="vote">
       <button id="btn-good" disabled title="イメージ通り / Sounds right">👍</button>
       <button id="btn-bad" disabled title="イメージと違う / Sounds wrong">👎</button>
-      <input id="fb-reason" maxlength="200" style="font-size:11px; padding:3px 7px;
+      <input id="fb-reason" maxlength="500" style="font-size:11px; padding:3px 7px;
         border:1px solid #ddd; border-radius:6px; width:200px;" placeholder="">
       <span id="vote-msg"></span>
     </span>
@@ -1635,7 +1635,7 @@ function vote(verdict) {
     v: FB_VERSION, id: u.id, t: new Date().toISOString(), lang: uiLang, eng: u.eng,
     src: u.src, word: u.word, mora: u.mora, redup: u.redup,
     axes: u.axes, moras: u.moras, vote: verdict,
-    reason: reasonEl ? reasonEl.value.trim().slice(0, 200) : "",
+    reason: reasonEl ? reasonEl.value.trim().slice(0, 500) : "",
     tags: [...activeFbTags],
   };
   if (u.k !== undefined) { rec.k = u.k; rec.cor = u.cor; rec.cs = u.cs; rec.lp = u.lp; }
