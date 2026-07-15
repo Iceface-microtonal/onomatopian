@@ -1230,6 +1230,63 @@ function openChevronSignal(cx) {
   return cx.corners === 1 && cx.loops === 0 && !cx.isClosed && cx.cornerSharpness >= 0.25;
 }
 
+// ─── P12 開いた弧の語彙 (2026-07-16 コウさん立法): 向き×大きさ → 固定語 ───
+// 正本 = Onomatoi/docs/FEEDBACK_2026-07-16_kou_open_arc_vocab.md。P11 の「向き不問・
+// 母音+ん」を上書きする。原理: 鼻音=柔らかさ / ん=収束 (円が完成したときだけ) /
+// 拗音=生物・意思 / 右重心の原則 (コウさんの書字方向: ⊃=接近・i で前に焦点化,
+// ⊂=後退・o で奥に集まる) / ∪ は重力が支配する例外。
+// my行は録音待ち — 語彙は my のまま保持し、再生だけ cv_m<v> へフォールバック
+// (bufferFor / sampleUrlCandidates)。録音が届けばファイルを置くだけで置き替わる。
+const ARC_VOCAB = {
+  right: ["myi", "myii", "myiii"],   // ⊃ 膨らみ右: 横から柔らかな何かが突き出る・飛んでくる
+  left:  ["myo", "myoo", "myooo"],   // ⊂ 膨らみ左: 音が引いていく・奥に集まる
+  up:    ["nyu", "nyuu", "nyuuu"],   // ∩ 膨らみ上: 下から持ち上がる・芽生え
+  down:  ["moo", "mooo", "moooo"],   // ∪ 膨らみ下: 下に音が籠る・重力・包み込む
+};
+const CIRCLE_VOCAB = "aaan";         // 完全な円: 収束の ん が初めて立つ (大きさ段階は未立法)
+
+/// 弧の膨らみの向き: 弦 (始点→終点) から最も遠い点 (弧の頂) が、弦の中点から見て
+/// どちらに膨らんでいるか。up = 画面上方向 (∩)。
+function arcBulgeDirection(points) {
+  const a = points[0], b = points[points.length - 1];
+  const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+  let best = points[0], bestD = -1;
+  const abx = b.x - a.x, aby = b.y - a.y;
+  const abLen = Math.max(1e-6, Math.hypot(abx, aby));
+  for (const p of points) {
+    // 弦からの垂直距離 (外積の絶対値 / 弦長)
+    const d = Math.abs((p.x - a.x) * aby - (p.y - a.y) * abx) / abLen;
+    if (d > bestD) { bestD = d; best = p; }
+  }
+  const dx = best.x - mx, dy = best.y - my;
+  if (Math.abs(dx) >= Math.abs(dy)) return dx > 0 ? "right" : "left";
+  return dy < 0 ? "up" : "down";
+}
+
+/// 弧の大きさ 3 段 (0=小, 1=中, 2=大): bbox 対角 / キャンバス対角。
+function arcSizeClass(points, w, h) {
+  let minX = points[0].x, maxX = points[0].x, minY = points[0].y, maxY = points[0].y;
+  for (const p of points) {
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+  }
+  const ratio = Math.hypot(maxX - minX, maxY - minY) / Math.max(1, Math.hypot(w, h));
+  return ratio < 0.30 ? 0 : ratio < 0.55 ? 1 : 2;
+}
+
+/// 固定語彙語 → イベント。"myiii" = [myi, ー, ー] / "aaan" = [a, ー, ー, ん]。
+/// 生成エンジン (pickConsonant/pickVowel/legalize) は通さない決定的な語。
+function vocabEvent(word, axes) {
+  const m = word.match(/^([a-z]*?)([aiueo])([aiueo]*)(n?)$/);
+  const onset = m[1] || null;
+  const moras = [{ onset, nucleus: m[2], durationMs: 170 + axes.size * 20,
+                   gapMs: 0, amplitude: 1.0, isN: false, isQ: false }];
+  for (const hv of m[3]) moras.push(heldVowelMora(hv));
+  if (m[4] === "n") moras.push(moraicNMora());
+  const f0 = Math.max(80, Math.min(400, 200 * (1 + 0.2 * axes.bright - 0.2 * axes.size)));
+  return { axes: { ...axes }, moras, baseF0: f0, isRedup: false };
+}
+
 // ─── StrokeSegmenter (構造単位分割: ループ=音節, つなぎ線=ー/ん/っ/直結) ───
 const LOOP_WINDING = 2 * Math.PI * 0.75;
 function segmentStroke(points) {
@@ -1487,6 +1544,9 @@ function sampleKeys() {
   for (const v of CONTN_VOWELS) keys.push("v_" + v + "_nn");
   for (const p of DIPH_PAIRS) keys.push("diph_" + p);
   for (const p of CV_DIPH_EXT_PAIRS) keys.push("diph_" + p[0] + p[0] + p[1] + p[1]);
+  // P12 開いた弧の語彙で使う my行 (録音待ち)。sampleUrlCandidates が cv_m<v> へ
+  // フォールバックするので、録音が無い間は み/も の音で鳴る。
+  keys.push("cv_myi", "cv_myo");
   return keys;
 }
 // key に対応する実ファイル名の候補列 (先頭から順に fetch を試す)。通常は [key] のみ。
@@ -1503,6 +1563,10 @@ function sampleUrlCandidates(key) {
   // v_iiiiwav.wav 事故と同型の反復パターン — web 用 mp3 は正しい名で変換済みだが、
   // dev コピー (native Resources を直参照) はタイポ済み実ファイルに当たる。
   if (key.startsWith("diph_")) return [key, key + "wav"];
+  // P12: my行は録音待ち — cv_my<v> が無ければ cv_m<v> (み/も) で代用。
+  // コウさんが cv_myi/cv_myo を録音して置けば、自動的に本来の音へ置き替わる。
+  const my = key.match(/^cv_my([aiueo])$/);
+  if (my) return [key, "cv_m" + my[1]];
   return [key];
 }
 // Phase 1: fetch (gesture 不要なのでページロード直後に並列で始める)
@@ -1563,6 +1627,11 @@ function bufferFor(mora) {
   if (mora.onset === null) return sampleBank.get("v_" + mora.nucleus) ?? null;
   const exact = sampleBank.get("cv_" + mora.onset + mora.nucleus);
   if (exact) return exact;
+  // P12: my行 (録音待ち) は m行で代用 (sampleUrlCandidates の候補列と同じ趣旨の保険)。
+  if (mora.onset === "my") {
+    const fb = sampleBank.get("cv_m" + mora.nucleus);
+    if (fb) return fb;
+  }
   return sampleBank.get("cv_" + mora.onset + "a") ?? null;   // /a/ フォールバック
 }
 function contNBufferFor(vowel) { return sampleBank.get("v_" + vowel + "_nn") ?? null; }
@@ -1848,10 +1917,12 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 // ─── なぜ? (Onomatopoeia.explain の移植・日英) — 測って見せる説明 ───
-function explainEvent(ax, moras) {
+function explainEvent(ax, moras, vocabReason = null) {
   const voiced = moras.filter(m => !m.isSilentRest);
   if (!voiced.length) return [];
   const ja = uiLang === "ja";
+  // P12 記号語彙: 固定語彙の語は軸からの生成でないので、立法の理由だけを示す。
+  if (vocabReason) return [vocabReason];
   const f = v => (v >= 0 ? "+" : "") + v.toFixed(2);
   const onsets = voiced.map(m => m.onset).filter(c => c);
   const lines = [];
@@ -1912,10 +1983,10 @@ function whyFormReason(ax, moras, ja) {
   }
   return ja ? "素の語根" : "plain root";
 }
-function updateWhy(ax, moras) {
+function updateWhy(ax, moras, vocabReason = null) {
   const panel = document.getElementById("why-panel");
   if (!panel) return;
-  const lines = explainEvent(ax, moras);
+  const lines = explainEvent(ax, moras, vocabReason);
   if (!lines.length) { panel.style.display = "none"; return; }
   document.getElementById("why-title").textContent = uiLang === "ja" ? "なぜ?" : "why?";
   const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
@@ -1957,7 +2028,8 @@ function playAndRemember(event, axesUsed, log, src = "tune", extra = {}) {
   const tagBox = document.getElementById("fb-tags");
   if (tagBox) tagBox.style.display = "none";
   showResult(event);
-  updateWhy(axesUsed, event.moras);   // なぜ? (native の explain と同じ「測って見せる」説明)
+  // なぜ? (native の explain と同じ「測って見せる」説明)。P12 語彙語は立法の理由を示す。
+  updateWhy(axesUsed, event.moras, event.vocabReason ?? null);
   playEvent(event);
   if (log) appendLog(event);
 }
@@ -2287,8 +2359,29 @@ canvas.addEventListener("pointerup", ev => {
     // cornerSharpness<0.35: 角が丸まって2個以下に数えられた三角の「保持=長音」誤爆を防ぐ保険。
     const sustained = cx.loops <= 1 && cx.corners <= 2 && cx.cornerSharpness < 0.35
       && ax.tex < 0.3 && cx.moraCount >= 2;
-    // P11 記号語彙: 開いた弧/開いた一角は 1モーラ+ん の最小形に固定 (向き不問)。
+    // P12 記号語彙 (2026-07-16 コウさん立法): 開いた弧 (⊃⊂∩∪) = 向き×大きさの固定語彙。
+    // 完全に閉じた大きく開いた円 = aaan (収束の ん が初めて立つ)。小さく閉じた丸 (う=すぼめ)
+    // と楕円 (え, P9e で round が動く) は既存の口の法のまま。
+    // 開いた一角 (＜＞∧∨→子音+ん, P11) はコウさん未立法につき現状維持。
     const openArc = openArcSignal(cx), openChevron = openChevronSignal(cx);
+    let vocabWord = null, vocabReason = null;
+    if (openArc) {
+      const dir = arcBulgeDirection(inkPts);
+      const sizeClass = arcSizeClass(inkPts, rect.width, rect.height);
+      vocabWord = ARC_VOCAB[dir][sizeClass];
+      const dirJa = { right: "⊃ 膨らみ右=接近", left: "⊂ 膨らみ左=後退",
+                      up: "∩ 持ち上がり=芽生え", down: "∪ 重力=籠り" }[dir];
+      const sizeJa = ["小", "中", "大"][sizeClass];
+      vocabReason = uiLang === "ja"
+        ? `開いた弧 ${dirJa}・${sizeJa} → ${vocabWord}（鼻音=柔らかさ・ん は円が完成するまで付かない）`
+        : `open arc (${dir}, size ${sizeClass}) → ${vocabWord} (nasal = softness; no final N until the circle closes)`;
+    } else if (cx.isClosed && cx.corners === 0 && cx.rotationFraction > 0.8
+               && Math.abs(ax.round) <= 0.25 && ax.open >= 0.5) {
+      vocabWord = CIRCLE_VOCAB;
+      vocabReason = uiLang === "ja"
+        ? `完全な円 → ${CIRCLE_VOCAB}（円が完成して初めて 収束の ん が立つ）`
+        : `completed circle → ${CIRCLE_VOCAB} (the closing N appears only when the circle completes)`;
+    }
     const seg = segmentStroke(inkPts);
     // v4 フィードバック用の発話コンテキスト: 判定に使った導出量 + 描いた珠の頂点列 (正規化・≤48点)。
     const r3 = v => Math.round(v * 1000) / 1000;
@@ -2296,14 +2389,18 @@ canvas.addEventListener("pointerup", ev => {
       .map(p => [r3(p.x / rect.width), r3(p.y / rect.height)]);
     const extra = { k: kDraw, corners: cx.corners, cs: cx.cornerSharpness,
                     loops: cx.loops, stroke: beads };
-    if (unitEligible(seg)) {
+    if (vocabWord) {
+      const ev2 = vocabEvent(vocabWord, ax);
+      ev2.vocabReason = vocabReason;
+      playAndRemember(ev2, ax, true, "draw", extra);
+    } else if (unitEligible(seg)) {
       const event = generateFromUnits(seg.units, rect.width, rect.height, ax, kDraw, 0.4, mDraw);
       playAndRemember(event, ax, true, "draw", extra);
     } else {
       generateAndPlay(ax, 0, true, "draw",
-                      { moraCountOverride: (openArc || openChevron) ? 1 : cx.moraCount,
+                      { moraCountOverride: openChevron ? 1 : cx.moraCount,
                         kiki: kDraw, manner: mDraw, sustained, lengthHint: cx.moraCount,
-                        forceNilOnset: openArc, forceConsonantOnset: openChevron }, extra);
+                        forceConsonantOnset: openChevron }, extra);
     }
   }
   ev.preventDefault();

@@ -102,14 +102,16 @@ const engineSrc = extractEngine(fs.readFileSync(HTML_PATH, "utf8"));
 const EXPORTS = ["extractAxes", "applyHandCorrection", "bucketedAxes", "densified",
   "splineDensified", "strokeComplexity", "drawK", "mannerProfile", "segmentStroke",
   "unitEligible", "generateFromUnits", "generate", "axesSeed", "mulberry32",
-  "wordK", "romajiOf", "openArcSignal", "openChevronSignal"];
+  "wordK", "romajiOf", "openArcSignal", "openChevronSignal",
+  "arcBulgeDirection", "arcSizeClass", "vocabEvent", "ARC_VOCAB", "CIRCLE_VOCAB"];
 const ctx = vm.createContext({ console });
 vm.runInNewContext(
   engineSrc + `\n;globalThis.__api = { ${EXPORTS.join(", ")} };`,
   ctx, { filename: "engine(extracted)" });
 const api = ctx.__api;
 for (const name of EXPORTS) {
-  if (typeof api[name] !== "function") throw new Error(`engine 抽出失敗: ${name} が見つからない`);
+  // ARC_VOCAB / CIRCLE_VOCAB 等の定数も抽出対象 — 存在チェックのみ (関数とは限らない)。
+  if (api[name] === undefined) throw new Error(`engine 抽出失敗: ${name} が見つからない`);
 }
 
 // ─── 2. fixture 再生 ───────────────────────────────────────────
@@ -398,12 +400,32 @@ for (const [label, fn] of P6_CHECKS) {
   if (!ok) p6Fail++;
 }
 
-// ─── 4.6 P11 記号語彙サニティ (2026-07-15・regression 扱いで enforce) ───────
-// Icefaceさん発案: ⊃⊂∩∪ (開いた弧) → 母音+ん / ＜＞∧∨ (開いた一角) → 子音+ん。
-// round/open (口の形) や brightness は描線の向きに依存するため使わず、corners/
-// cornerSharpness/isClosed/rotationFraction/curveConsistency (向き不変な形の特徴)
-// だけで判定する (MANNER_CLASS 同様 web を判定正本として先に固定・Core は後追い)。
-function p11PipelineTally(pts, N) {
+// ─── 4.6 P11/P12 記号語彙サニティ (2026-07-16 コウさん立法で更新・regression 扱いで enforce) ───
+// P12 (コウさん立法 2026-07-16, 正本 = docs/FEEDBACK_2026-07-16_kou_open_arc_vocab.md):
+// 開いた弧 ⊃⊂∩∪ = 向き×大きさの固定語彙 (myi/myo/nyu/moo 系・語末ん なし)。
+// 完全な大きく開いた円 = aaan (収束の ん が初めて立つ)。
+// P11 (Icefaceさん発案・存続分): 開いた一角 ＜＞∧∨ → 子音+ん (コウさん未立法につき現状維持)。
+/// pointerup の P12 語彙判定を忠実に再現。語彙語なら romaji を、通常経路なら null を返す。
+function p12VocabWord(pts) {
+  const inkPts = api.densified(pts, 6);
+  const raw = api.extractAxes(inkPts, W, H);
+  let ax = api.applyHandCorrection(raw, HAND_CORR, true);
+  ax = api.bucketedAxes(ax, 0.25);
+  const geomPts = pts.length >= 3 ? api.splineDensified(pts, 6) : inkPts;
+  const cx = api.strokeComplexity(geomPts, W, H, 16);
+  if (api.openArcSignal(cx)) {
+    const dir = api.arcBulgeDirection(inkPts);
+    const sc = api.arcSizeClass(inkPts, W, H);
+    return api.romajiOf(api.vocabEvent(api.ARC_VOCAB[dir][sc], ax));
+  }
+  if (cx.isClosed && cx.corners === 0 && cx.rotationFraction > 0.8
+      && Math.abs(ax.round) <= 0.25 && ax.open >= 0.5) {
+    return api.romajiOf(api.vocabEvent(api.CIRCLE_VOCAB, ax));
+  }
+  return null;
+}
+/// 一角用: 従来どおり forceConsonantOnset 経路の統計。
+function chevronTally(pts, N) {
   const inkPts = api.densified(pts, 6);
   const raw = api.extractAxes(inkPts, W, H);
   const ax = api.applyHandCorrection(raw, HAND_CORR, true);
@@ -411,26 +433,36 @@ function p11PipelineTally(pts, N) {
   const cx = api.strokeComplexity(geomPts, W, H, 16);
   const kDraw = api.drawK(ax.sharp, cx.corners, cx.cornerSharpness);
   const manner = api.mannerProfile(ax.sharp, cx.corners, cx.cornerSharpness, ax.tex, cx.loops);
-  const openArc = api.openArcSignal(cx), openChevron = api.openChevronSignal(cx);
-  let nilOnsetFirst = 0, consOnsetFirst = 0, endsWithN = 0;
+  const openChevron = api.openChevronSignal(cx);
+  let consOnsetFirst = 0, endsWithN = 0;
   for (let seed = 0; seed < N; seed++) {
     const rand = api.mulberry32(api.axesSeed(ax, seed));
     const ev = api.generate(ax, rand, 0.4, {
-      moraCountOverride: (openArc || openChevron) ? 1 : cx.moraCount,
+      moraCountOverride: openChevron ? 1 : cx.moraCount,
       kiki: kDraw, manner, lengthHint: cx.moraCount,
-      forceNilOnset: openArc, forceConsonantOnset: openChevron,
+      forceConsonantOnset: openChevron,
     });
-    if (ev.moras[0].onset === null) nilOnsetFirst++; else consOnsetFirst++;
+    if (ev.moras[0].onset !== null) consOnsetFirst++;
     if (ev.moras[ev.moras.length - 1].isN) endsWithN++;
   }
-  return { cx, openArc, openChevron, nilOnsetFirst, consOnsetFirst, endsWithN };
+  return { openChevron, consOnsetFirst, endsWithN };
 }
-function arcPts(sweepDeg, rotateDeg) {
-  const pts = [], r = 90, sweep = sweepDeg * Math.PI / 180, rot = rotateDeg * Math.PI / 180;
-  const start = -sweep / 2 + rot;
+/// 膨らみ dir の弧 (中心角 200°)。r で大きさを変える。
+function bulgeArcPts(bulge, r) {
+  const centerAng = { right: 0, left: Math.PI, up: -Math.PI / 2, down: Math.PI / 2 }[bulge];
+  const sweep = 200 * Math.PI / 180, start = centerAng - sweep / 2;
+  const pts = [];
   for (let i = 0; i <= 40; i++) {
-    const ang = start + (i / 40) * sweep;
-    pts.push({ x: 180 + r * Math.cos(ang), y: 180 + r * Math.sin(ang) });
+    const a = start + (i / 40) * sweep;
+    pts.push({ x: 180 + r * Math.cos(a), y: 180 + r * Math.sin(a) });
+  }
+  return pts;
+}
+function circlePts2(r) {
+  const pts = [];
+  for (let i = 0; i <= 60; i++) {
+    const a = i / 60 * 2 * Math.PI;
+    pts.push({ x: 180 + r * Math.cos(a), y: 180 + r * Math.sin(a) });
   }
   return pts;
 }
@@ -442,25 +474,40 @@ function chevronPts(apexDeg) {
   for (let i = 1; i <= 20; i++) { const t = i / 20; pts.push({ x: apex.x + dir2.x * legLen * t, y: apex.y + dir2.y * legLen * t }); }
   return pts;
 }
+function tiltedEllipsePts(tiltDeg, a = 120, b = 45) {
+  const t0 = tiltDeg * Math.PI / 180, pts = [];
+  for (let i = 0; i <= 60; i++) {
+    const t = i / 60 * 2 * Math.PI;
+    const ex = a * Math.cos(t), ey = b * Math.sin(t);
+    pts.push({ x: 180 + ex * Math.cos(t0) - ey * Math.sin(t0),
+               y: 180 + ex * Math.sin(t0) + ey * Math.cos(t0) });
+  }
+  return pts;
+}
 const P11_N = 300;
-const arcRotations = [0, 90, 180, 270].map(rot => p11PipelineTally(arcPts(200, rot), P11_N));
-const chevronVariants = [30, 60].map(deg => p11PipelineTally(chevronPts(deg), P11_N));
+const chevronVariants = [30, 60].map(deg => chevronTally(chevronPts(deg), P11_N));
+// コウさんの語彙表: 膨らみの向き → [小, 中, 大]
+const P12_EXPECT = {
+  right: ["myi", "myii", "myiii"], left: ["myo", "myoo", "myooo"],
+  up: ["nyu", "nyuu", "nyuuu"], down: ["moo", "mooo", "moooo"],
+};
+const P12_RADII = [40, 90, 150];   // 小 / 中 / 大 (360×360 キャンバス)
 const P11_CHECKS = [
-  ["開いた弧 (4方向) は全て openArc 判定になる",
-    () => arcRotations.every(r => r.openArc)],
-  ["開いた弧: 全方向で onset なし (母音のみ) が支配的 (100%)",
-    () => arcRotations.every(r => r.nilOnsetFirst === P11_N)],
-  ["開いた弧: 全方向で語末んを保つ (100%)",
-    () => arcRotations.every(r => r.endsWithN === P11_N)],
+  ...Object.entries(P12_EXPECT).map(([dir, words]) =>
+    [`⊃⊂∩∪ ${dir}: 大きさ 3 段で ${words.join("/")} (コウさん語彙)`,
+      () => P12_RADII.every((r, i) => p12VocabWord(bulgeArcPts(dir, r)) === words[i])]),
+  ["完全な円 (大/中): aaan (収束の ん が立つ)",
+    () => p12VocabWord(circlePts2(140)) === "aaan" && p12VocabWord(circlePts2(80)) === "aaan"],
+  ["小さく閉じた丸: 語彙にならない (う=すぼめの既存法を保つ)",
+    () => p12VocabWord(circlePts2(40)) === null],
+  ["斜め楕円: 語彙にならない (え=P9e の既存法を保つ)",
+    () => p12VocabWord(tiltedEllipsePts(-30)) === null],
   ["開いた一角 (2種) は全て openChevron 判定になる",
     () => chevronVariants.every(r => r.openChevron)],
   ["開いた一角: 子音 onset が支配的 (100%)",
     () => chevronVariants.every(r => r.consOnsetFirst === P11_N)],
   ["開いた一角: 語末んを保つ (100%)",
     () => chevronVariants.every(r => r.endsWithN === P11_N)],
-  ["丸 #1 (閉じた円) は openArc/openChevron どちらにもならない (既存の丸ん等を壊さない)",
-    () => { const cx = cxOfBeads(byId["mrfxxez7-3"].stroke);
-            return !api.openArcSignal(cx) && !api.openChevronSignal(cx); }],
   ["双こぶ #4 (ループ2) は openArc/openChevron どちらにもならない",
     () => { const cx = cxOfBeads(byId["mrgv9lk7-5"].stroke);
             return !api.openArcSignal(cx) && !api.openChevronSignal(cx); }],
@@ -468,11 +515,13 @@ const P11_CHECKS = [
     () => !api.openArcSignal(cxOfPts(sinePts))],
   ["合成ジグザグ (角5個) は openArc/openChevron どちらにもならない",
     () => { const cx = cxOfPts(zigzagPts); return !api.openArcSignal(cx) && !api.openChevronSignal(cx); }],
-  ["横一本線 (P6 対象) は openArc/openChevron どちらにもならない",
-    () => { const cx = cxOfPts(straightHPts); return !api.openArcSignal(cx) && !api.openChevronSignal(cx); }],
+  ["横一本線 (P6 対象) は openArc/openChevron どちらにもならない・語彙にもならない",
+    () => { const cx = cxOfPts(straightHPts);
+            return !api.openArcSignal(cx) && !api.openChevronSignal(cx)
+                && p12VocabWord(straightHPts) === null; }],
 ];
 let p11Fail = 0;
-console.log("\nP11 記号語彙サニティ (⊃⊂∩∪→母音+ん・＜＞∧∨→子音+ん、向き不問・既存形は誤爆しない):");
+console.log("\nP11/P12 記号語彙サニティ (⊃⊂∩∪=コウさん語彙・円=aaan・＜＞∧∨=子音+ん・既存形は誤爆しない):");
 for (const [label, fn] of P11_CHECKS) {
   let ok = false;
   try { ok = fn(); } catch { ok = false; }
