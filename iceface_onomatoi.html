@@ -580,7 +580,12 @@ function pickVowel(target, redupFirst, temperature, restrict, rand, avoidVowel =
     if (avoidVowel === v) s -= 2.0;   // P10: 同調音位置の連続時は同母音を強く避ける
     scores.push([v, s]);
   }
-  return softmaxSample(scores, temperature, rand) ?? "a";
+  // P9e (2026-07-15): 口の証拠が強いほど母音選択の温度を絞る。決定的シードでは 2% の
+  // 不運な揺れ (round −0.75 なのに う) が同じバケット軸の全描線に凍結される —
+  // 証拠が明確なときは揺れの余地自体を減らす。ms は scoreVowel と同じ口の強度尺度。
+  // 口が中立 (0,0) なら t = temperature で厳密旧挙動。
+  const ms = Math.min(1, (Math.abs(target.open || 0) + Math.abs(target.round || 0)) / 1.2);
+  return softmaxSample(scores, temperature * (1 - 0.5 * ms), rand) ?? "a";
 }
 function geminateGapMs(c) {
   if (c === null) return 70;
@@ -1013,9 +1018,24 @@ function extractAxes(points, w, h) {
   const smallGate = smoothstep(0.10, -0.40, open);
   const roundShapeGate = Math.max(0, 1 - Math.abs(spreadRaw) / 0.5);
   const purse = 0.5 * closedGate * smallGate * roundShapeGate;
-  const round = clamp(-spreadRaw + purse - 0.18 * Math.max(0, sharp));
+  let round = clamp(-spreadRaw + purse - 0.18 * Math.max(0, sharp));
 
-  return { size, sharp, tex, bright, round, open };
+  // P9e (2026-07-15, Icefaceさん立法): 斜めの楕円 = え。横長閉=い(横引き・閉じ)・縦長閉=う
+  // (すぼめ)・丸開=あ の中間 — 斜めに伸びた閉形は「横に引きながら開いた口」= え として読む。
+  // horiz = cos2θ は斜め (±45°) で 0 になり伸びの証拠が round から消えていた (楕円なのに
+  // 面積だけで open +1 → あ圏)。1−|horiz| は傾きの符号に対称 = 右上がり/左上がりのどちらの
+  // 楕円でも同じ え (作者仕様: 反転させた形でも え)。開いた弧や直線は closedness=0 で不発火。
+  const diagSpread = spreadMag * (1 - Math.abs(horiz)) * closedness;
+  const eGate = smoothstep(0.06, 0.22, diagSpread);
+  let openAdj = open;
+  if (eGate > 0) {
+    // diagSpread の補填: horiz=cos2θ が斜めで消した伸び成分を round にそのまま返す。
+    // これで 30° と 45° の傾きが同じ深さの横引きになる (45° だけ え が弱い偏りを消す)。
+    round = clamp(round - diagSpread - 0.35 * eGate);   // 横引き側へ (え: round −0.30)
+    openAdj = open * (1 - eGate) + 0.45 * eGate;        // え の開口 (+0.45) へブレンド
+  }
+
+  return { size, sharp, tex, bright, round, open: openAdj };
 }
 function applyHandCorrection(ax, level, dampenTexture = true) {
   const amt = Math.max(0, Math.min(1, level));

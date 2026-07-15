@@ -480,6 +480,69 @@ for (const [label, fn] of P11_CHECKS) {
   if (!ok) p11Fail++;
 }
 
+// ─── 4.7 P9e 斜め楕円=え サニティ (2026-07-15・regression 扱いで enforce) ───────
+// Icefaceさん立法: 斜めに伸びた閉形 (楕円) は「横に引きながら開いた口」= え。左右どちらの
+// 傾きでも同じ (反転対称)。horiz=cos2θ が斜めで伸びの証拠を消していたのを diagSpread で
+// 補填 + 口の証拠が強いときは pickVowel の温度を絞る (2% の不運な揺れの凍結防止)。
+function p9eNucleusShare(pts, N) {
+  const inkPts = api.densified(pts, 6);
+  const raw = api.extractAxes(inkPts, W, H);
+  let ax = api.applyHandCorrection(raw, HAND_CORR, true);
+  ax = api.bucketedAxes(ax, 0.25);
+  const geomPts = api.splineDensified(pts, 6);
+  const cx = api.strokeComplexity(geomPts, W, H, 16);
+  const kDraw = api.drawK(ax.sharp, cx.corners, cx.cornerSharpness);
+  const manner = api.mannerProfile(ax.sharp, cx.corners, cx.cornerSharpness, ax.tex, cx.loops);
+  const sustained = cx.loops <= 1 && cx.corners <= 2 && cx.cornerSharpness < 0.35
+    && ax.tex < 0.3 && cx.moraCount >= 2;
+  const tally = { a: 0, i: 0, u: 0, e: 0, o: 0 };
+  for (let seed = 0; seed < N; seed++) {
+    const rand = api.mulberry32(api.axesSeed(ax, seed));
+    const ev = api.generate(ax, rand, 0.4, { moraCountOverride: cx.moraCount, kiki: kDraw,
+                                             manner, sustained, lengthHint: cx.moraCount });
+    for (const m of ev.moras) if (!m.isN) tally[m.nucleus]++;
+  }
+  const total = Object.values(tally).reduce((x, y) => x + y, 0);
+  return { tally, total, share: v => tally[v] / Math.max(1, total) };
+}
+function ellipsePts(tiltDeg, a = 120, b = 45) {
+  const tilt = tiltDeg * Math.PI / 180, pts = [];
+  for (let i = 0; i <= 60; i++) {
+    const t = i / 60 * 2 * Math.PI;
+    const ex = a * Math.cos(t), ey = b * Math.sin(t);
+    pts.push({ x: 180 + ex * Math.cos(tilt) - ey * Math.sin(tilt),
+               y: 180 + ex * Math.sin(tilt) + ey * Math.cos(tilt) });
+  }
+  return pts;
+}
+const P9E_N = 200;
+const p9eTilts = [-30, 30, -45, 45].map(deg => [deg, p9eNucleusShare(ellipsePts(deg), P9E_N)]);
+const p9eCircle = p9eNucleusShare(ellipsePts(0, 90, 90), P9E_N);
+const p9eVertLine = (() => {
+  const pts = []; for (let i = 0; i <= 40; i++) pts.push({ x: 180, y: 60 + i * 6 });
+  return p9eNucleusShare(pts, P9E_N);
+})();
+const P9E_CHECKS = [
+  ...p9eTilts.map(([deg, r]) =>
+    [`斜め楕円 ${deg}°: え が最頻母音 (実測 e=${(r.share("e") * 100).toFixed(0)}%)`,
+     () => ["a", "i", "u", "o"].every(v => r.share("e") > r.share(v))]),
+  ["斜め楕円: 左右の傾きで母音分布が同一 (反転対称)",
+    () => JSON.stringify(p9eTilts[0][1].tally) === JSON.stringify(p9eTilts[1][1].tally)
+       && JSON.stringify(p9eTilts[2][1].tally) === JSON.stringify(p9eTilts[3][1].tally)],
+  [`円 (傾きなし) は え 支配にならない (実測 e=${(p9eCircle.share("e") * 100).toFixed(0)}%)`,
+    () => p9eCircle.share("e") < 0.4],
+  [`縦一本線は う 優勢のまま (P9e が縦線を壊さない・実測 u=${(p9eVertLine.share("u") * 100).toFixed(0)}%)`,
+    () => ["a", "i", "e", "o"].every(v => p9eVertLine.share("u") > p9eVertLine.share(v))],
+];
+let p9eFail = 0;
+console.log("\nP9e 斜め楕円=え サニティ (傾き両方向で え・円/縦線は不変):");
+for (const [label, fn] of P9E_CHECKS) {
+  let ok = false;
+  try { ok = fn(); } catch { ok = false; }
+  console.log(`  ${ok ? "✅" : "❌"} ${label}`);
+  if (!ok) p9eFail++;
+}
+
 // ─── 5. fixture 性質テストの実行・レポート ─────────────────────────
 
 let regressFail = 0, targetFail = 0, targetPass = 0, errors = 0;
@@ -530,7 +593,7 @@ for (const [id, tier, words, desc, note] of rows) {
   console.log(`      当時→今日: ${words}`);
   console.log(`      性質: ${desc}\n`);
 }
-console.log(`  幾何サニティ破れ: ${geomFail} / P6拗音ゲート破れ: ${p6Fail} / P11記号語彙破れ: ${p11Fail} / regression 破れ: ${regressFail} / target 既知FAIL: ${targetFail} / target 先行達成: ${targetPass} / エラー: ${errors}\n`);
+console.log(`  幾何サニティ破れ: ${geomFail} / P6拗音ゲート破れ: ${p6Fail} / P11記号語彙破れ: ${p11Fail} / P9e斜め楕円破れ: ${p9eFail} / regression 破れ: ${regressFail} / target 既知FAIL: ${targetFail} / target 先行達成: ${targetPass} / エラー: ${errors}\n`);
 
-if (geomFail > 0 || p6Fail > 0 || p11Fail > 0 || regressFail > 0 || errors > 0 || (strict && targetFail > 0)) process.exit(1);
+if (geomFail > 0 || p6Fail > 0 || p11Fail > 0 || p9eFail > 0 || regressFail > 0 || errors > 0 || (strict && targetFail > 0)) process.exit(1);
 console.log(strict ? "STRICT: all green ✅" : "幾何+regression green ✅ (target は処方 P2〜P7 の進捗指標)");
