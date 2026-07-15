@@ -153,6 +153,14 @@ function sustainedOf(rec, moraCount) {
 function replayRecorded(rec) {
   const a = rec.axes;
   const ax = { size: a.s, sharp: a.sh, tex: a.t, bright: a.b, round: a.r, open: a.o };
+  // mc 注記 (fbVersion5 `mc` の前倒し・curator 永続化) があれば探索不要でそのまま使う。
+  // これによりエンジンが記録時から変わっても「コウさん端末由来の正確な入力」で
+  // 新エンジンを judged できる (キャンバス寸法差のある stroke 再導出より強い判定)。
+  if (typeof rec.mc === "number") {
+    const ev = runGeneration(ax, rec.k, rec.cor, rec.cs, rec.lp, rec.mc,
+                             sustainedOf(rec, rec.mc));
+    return { event: ev, ax, mc: rec.mc, calibrated: true, pinned: true };
+  }
   for (let mc = 1; mc <= 16; mc++) {
     const ev = runGeneration(ax, rec.k, rec.cor, rec.cs, rec.lp, mc, sustainedOf(rec, mc));
     if (api.romajiOf(ev) === rec.word) return { event: ev, ax, mc, calibrated: true };
@@ -265,15 +273,21 @@ const PROPERTIES = {
     // di→zi (歯茎→歯茎×同母音i) が違反、digaziba (d歯茎→g軟口蓋→z歯茎→b唇 ×
     // i-a-i-a 交替) が模範。gibiin (gi軟口蓋→bi唇) が 👍 だった謎もこれで解ける。
     // 音韻論の OCP (必異原理) と同型 = [普遍] の裏付けを持つ [慣習] 立法。
-    desc: "P10 言いやすさ: 隣接 CV モーラが 同母音×同調音位置 を繰り返さない",
+    desc: "P10 言いやすさ v1.1: 隣接 CV が 阻害音同士×異調音方法×同位置×同母音 を"
+      + "繰り返さない (di→zi 禁止・ここ/ただ/さざ/まわ は許容)",
     check: ev => {
       const PLACE = { p: "lab", b: "lab", m: "lab", f: "lab", w: "lab", my: "lab",
                       t: "alv", d: "alv", s: "alv", z: "alv", n: "alv", r: "alv", ts: "alv",
                       sh: "pal", j: "pal", ch: "pal", y: "pal", ny: "pal",
-                      k: "vel", g: "vel", ky: "vel", gy: "vel", h: "glo" };
+                      k: "vel", g: "vel", ky: "palvel", gy: "palvel", h: "glo" };
+      const MANNER = { k: "p", g: "p", t: "p", d: "p", p: "p", b: "p", ky: "p", gy: "p",
+                       ts: "a", ch: "a", j: "a", s: "f", sh: "f", z: "f", h: "f", f: "f" };
+      const SONORANT = new Set(["m", "n", "ny", "r", "w", "y", "my"]);
       for (let i = 1; i < ev.moras.length; i++) {
         const a = ev.moras[i - 1], b = ev.moras[i];
-        if (a.onset && b.onset && !a.isN && !b.isN
+        if (a.onset && b.onset && a.onset !== b.onset && !a.isN && !b.isN
+            && !SONORANT.has(a.onset) && !SONORANT.has(b.onset)
+            && MANNER[a.onset] !== MANNER[b.onset]
             && a.nucleus === b.nucleus && PLACE[a.onset] === PLACE[b.onset]) return false;
       }
       return true;
@@ -348,7 +362,9 @@ for (const rec of fixture.records) {
     let event = rr.event;
     let stroke = null;
     try { stroke = replayFromStroke(rec); strokeWord = api.romajiOf(stroke.event); } catch { }
-    if (rr.calibrated) {
+    if (rr.pinned) {
+      match = ` (mc=${rr.mc} 固定・recorded判定)`;
+    } else if (rr.calibrated) {
       match = ` (mc=${rr.mc} で当時と一致)`;
     } else if (stroke) {
       // recorded モードで復元不能 = 単位語経路 (generateFromUnits) か記録後のエンジン変化。

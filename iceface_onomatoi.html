@@ -377,6 +377,43 @@ const MANNER_CLASS = { k:"p", g:"p", t:"p", d:"p", p:"p", b:"p", ky:"p", gy:"p",
                        s:"f", sh:"f", z:"f", h:"f", f:"f",
                        m:"s", n:"s", ny:"s", r:"s", w:"s", y:"s" };
 const MANNER_WEIGHT = 0.8;
+// ─── P2 調音位置 (2026-07-15, Jakobson grave/acute): 描線の丸↔尖 ↔ 子音の調音位置 ───
+// コウさん立法 (#2 joooo / #4 gyagigyogo / #7 jon): 丸に歯茎硬口蓋 (j/sh/ch) や拗音は
+// 不適・軟口蓋 plain (k/g) や唇音は適。**阻害音のみ**に掛ける (共鳴音 n/ny/m/w/r の
+// 柔らかさは K・manner が既に担う — 波→にょ 👍 を壊さない)。ky/gy は硬口蓋化 = acute 側
+// (plain velar との区別こそが #4 の立法)。kiki 経路のみ = スライダー経路は厳密互換。
+const PLACE_CLASS = { p:"lab", b:"lab", m:"lab", f:"lab", w:"lab",
+                      t:"alv", d:"alv", s:"alv", z:"alv", n:"alv", r:"alv", ts:"alv",
+                      sh:"pal", j:"pal", ch:"pal", y:"pal", ny:"pal",
+                      k:"vel", g:"vel", ky:"palvel", gy:"palvel", h:"glo" };
+const PLACE_ACUTE = { lab:-0.8, glo:-0.5, vel:-0.5, palvel:0.8, alv:0.6, pal:1.0 };
+const PLACE_WEIGHT = 0.5;
+// ─── P10 言いやすさ (2026-07-15, OCP 必異原理): 隣接 CV の 同母音×同調音位置 禁止 ───
+// コウさん立法 (dizidozo→digaziba):「続くと言いづらい言葉は、定着しにくい」。
+// di→zi (歯茎×i で別子音に再構成) が違反。**同一 onset の反復 (ここ/ささ/ころころ) は
+// 除外** — 同一音節の繰り返しは運動プログラムの反復で楽・畳語文化を壊さない。
+// 違反ペアは後者の母音を ablaut で交替 (digaziba の i-a-i-a と同じ解)。左→右の
+// 単一パスで連鎖も解消 (修正後の i を次のペアが参照する)。
+// v1.1 (統計テストによる精密化 2026-07-15): 対象は**阻害音同士×異なる調音方法**のみ。
+// まわ/らな (共鳴音)・ただ/かが (同方法)・さざ (sazanami) は言いやすいので許容 —
+// 真の困難は「同じ場所で閉鎖↔摩擦の構えを組み替える」こと (di→zi / do→zo)。
+function ocpViolates(a, b) {
+  return !!(a.onset && b.onset && a.onset !== b.onset
+    && isObstruent(a.onset) && isObstruent(b.onset)
+    && !a.isN && !b.isN && !a.isQ && !b.isQ
+    && a.nucleus === b.nucleus
+    && PLACE_CLASS[a.onset] === PLACE_CLASS[b.onset]
+    && mannerClassOf(a.onset) !== mannerClassOf(b.onset));
+}
+function applyOCP(moras) {
+  const out = moras.slice();
+  for (let i = 1; i < out.length; i++) {
+    if (ocpViolates(out[i - 1], out[i])) {
+      out[i] = { ...out[i], nucleus: ablautVowel(out[i].nucleus) };
+    }
+  }
+  return out;
+}
 function mannerClassOf(c) { return c === null ? "s" : (MANNER_CLASS[c] ?? "s"); }
 function mannerProfile(sharp, corners, cornerSharpness, tex, loops) {
   const cs = Math.max(0, Math.min(1, cornerSharpness));
@@ -514,17 +551,22 @@ function pickConsonant(target, prevOnset, temperature, rand, kiki = null, manner
       : scoreAgainst(target, CONSONANT_BIAS[c]);
     // 調音方法の親和 (2026-07-10 manner 次元): 描線の動態 ↔ 破裂/破擦/摩擦/共鳴。
     if (manner !== null) s += MANNER_WEIGHT * (manner[mannerClassOf(c)] ?? 0);
+    // P2 調音位置: 丸↔尖 (kiki) と grave↔acute の距離 (阻害音のみ・kiki 経路のみ)
+    if (kiki !== null && isObstruent(c)) {
+      s -= PLACE_WEIGHT * Math.abs((PLACE_ACUTE[PLACE_CLASS[c]] ?? 0) - kiki);
+    }
     if (prevOnset === c) s -= 0.3;             // 同子音連続ペナルティ
     scores.push([c, s]);
   }
   return softmaxSample(scores, temperature, rand);
 }
-function pickVowel(target, redupFirst, temperature, restrict, rand) {
+function pickVowel(target, redupFirst, temperature, restrict, rand, avoidVowel = null) {
   const scores = [];
   for (const v of VOWELS) {
     if (restrict && !restrict.has(v)) continue;
     let s = scoreVowel(target, VOWEL_BIAS[v]);
     if (redupFirst && redupFirst === v) s += 0.3;
+    if (avoidVowel === v) s -= 2.0;   // P10: 同調音位置の連続時は同母音を強く避ける
     scores.push([v, s]);
   }
   return softmaxSample(scores, temperature, rand) ?? "a";
@@ -742,6 +784,8 @@ function legalize(moras, axes, lengthHint = null, sustained = false, kiki = null
     }
   }
   if (out.length > targetLen) out = out.slice(0, targetLen);
+  // P10 最終ガード: テンプレ再形成/タイルで生まれた隣接違反も左→右で解消 (kiki 経路のみ)
+  if (kiki !== null) out = applyOCP(out);
   return out.map(nativize);
 }
 
@@ -768,13 +812,22 @@ function generate(axes, rand, temperature = 0.4, opts = {}) {
   const uniqueCount = (isRedup || quasiRedup) ? Math.min(2, moraCount) : moraCount;
 
   const unique = [];
-  let prevOnset = undefined, firstVowel = null;
+  let prevOnset = undefined, firstVowel = null, prevNucleus = null;
   for (let i = 0; i < uniqueCount; i++) {
     const onset = pickConsonant(axes, prevOnset === undefined ? "" : prevOnset, temperature, rand, kiki, manner);
     let restrict = null;
     if (onset && (PALATALIZED.has(onset) || SEMIVOWEL.has(onset))) restrict = new Set(["a","u","o"]);
     // ch は cha/chi/chu/cho/che 全て収録済 (2026-06 に che 追加) → 全母音可。
-    const nucleus = pickVowel(axes, isRedup ? firstVowel : null, temperature, restrict, rand);
+    // P10: 直前と同調音位置の別子音なら同母音を避ける (ソフト) + 決定的ガード。
+    // ablaut の出力は a/o のみ = 拗音 restrict {a,u,o} に必ず適合。
+    const samePlace = kiki !== null && onset && prevOnset && onset !== prevOnset
+      && isObstruent(onset) && isObstruent(prevOnset)
+      && PLACE_CLASS[onset] === PLACE_CLASS[prevOnset]
+      && mannerClassOf(onset) !== mannerClassOf(prevOnset);
+    let nucleus = pickVowel(axes, isRedup ? firstVowel : null, temperature, restrict,
+                            rand, samePlace ? prevNucleus : null);
+    if (samePlace && nucleus === prevNucleus) nucleus = ablautVowel(nucleus);
+    prevNucleus = nucleus;
     if (firstVowel === null) firstVowel = nucleus;
     unique.push({ onset, nucleus, durationMs: 170 + axes.size * 20,
                   gapMs: 0, amplitude: 1.0, isN: false, isQ: false });
@@ -1201,6 +1254,7 @@ function polishUnits(moras, axes, kiki = null) {
   let out = moras.map(m => biasVoicing(m, axes.size));
   const fi = out.findIndex(m => m.onset !== null && !m.isN);
   if (fi >= 0) out[fi] = biasInitialP(out[fi], axes, kiki);
+  if (kiki !== null) out = applyOCP(out);   // P10 (単位語経路は legalize を通らない)
   out = out.map(nativize);
   if (out.length > 16) out = out.slice(0, 16);
   return out;
