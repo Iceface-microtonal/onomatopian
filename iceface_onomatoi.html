@@ -217,6 +217,13 @@
  *  - 継続撥音 (v_<v>_nn.mp3, prepareContN 相当の頭-19dB→尾-17.5dB 整形を事前ベイク) — 語中の
  *    ん (どーん/ふんわり) を n_N.mp3 でなく前母音から続けて鳴らす。
  *  - CV→V diph (diph_<v1><v2>.mp3 をそのまま使う簡易版) — かい/こう等の語末連続母音。
+ * v13 (2026-07-16): **native 音声レンダラの移植** — FormantSynth.render のサンプル精度
+ *    オフライン合成 (長母音延長=1テイク継続 / 継続撥音・cvDiph の先行オーバーラップ /
+ *    V+V 生 diph / 拡張 run の長尺録音 [core v8] / 語末ん・語末 diph のリリース) を
+ *    JS へ移植し、語全体を 1 バッファに描いてから 1 ノードで再生する。
+ *    モーラ個別再アタック (v12) は ?voice=legacy でいつでも戻せる (フォールバックも自動)。
+ *    diph_* は非圧縮 .wav を優先ロード (mp3 は継ぎ足し読みに弱い — フレーム量子化で
+ *    定常部が揺れる/先頭パディングで位置がずれる)。warabe 音程バリアントは移植しない。
  * ============================================================ */
 
 const SAMPLE_BASE = "./ConsonantsOnomatoi/";   // wav の場所 (開発用: プロジェクト内参照)
@@ -1577,6 +1584,9 @@ function sampleKeys() {
     for (const v of vs) keys.push("cv_" + c + v);
   }
   for (const v of VOWELS) keys.push("v_" + v);
+  // v13: 持続母音テイク (v_aaaa 等・伸ばし録音)。native 同様、長母音延長の本体を
+  // 減衰しない定常テイクで伸ばすために再導入 (v12 の個別再アタックでは不使用だった)。
+  for (const v of VOWELS) keys.push("v_" + v + v + v + v);
   keys.push("n_N");
   for (const v of CONTN_VOWELS) keys.push("v_" + v + "_nn");
   for (const p of DIPH_PAIRS) keys.push("diph_" + p);
@@ -1586,32 +1596,36 @@ function sampleKeys() {
   keys.push("cv_myi", "cv_myo", "cv_myu", "cv_mya");
   return keys;
 }
-// key に対応する実ファイル名の候補列 (先頭から順に fetch を試す)。通常は [key] のみ。
+// key に対応する実ファイル名の候補列 (**拡張子込み**・先頭から順に fetch を試す)。
+// v13: diph_* と持続母音テイク (v_aaaa 等) は非圧縮 .wav を最優先 — 1テイク継続読み
+// (任意オフセット・クロスフェード・sustainWrap) は mp3 のフレーム量子化/先頭パディングに
+// 弱いため、これらだけ非圧縮で配る (Icefaceさんが repo へ直接アップロード)。無ければ mp3。
 function sampleUrlCandidates(key) {
+  const names = [];
+  const wavFirst = key.startsWith("diph_") || /^v_([aiueo])\1\1\1$/.test(key);
+  if (wavFirst) names.push(key + ".wav");
+  names.push(key + SAMPLE_EXT);
   if (key.startsWith("v_") && key.endsWith("_nn")) {
     const vowel = key.slice(2, -3);   // "v_a_nn" → "a"
     const fb = CONTN_FALLBACK[vowel];
-    if (fb) return [key, fb];
+    if (fb) names.push(fb + SAMPLE_EXT);
   }
-  // (2026-07-11 v3: 母音単独の持続テイク優先 [v_aaaa 等] は撤回 — 延長機構の廃止で
-  //  各モーラが個別に鳴る方式に戻ったため、1モーラ向けの自然な attack/decay を持つ
-  //  短い v_<v> テイクをそのまま使うのが正しい)
   // 2026-07-14: native 資産の命名タイポ救済 (diph_aaii → 実ファイルは diph_aaiiwav.wav)。
   // v_iiiiwav.wav 事故と同型の反復パターン — web 用 mp3 は正しい名で変換済みだが、
   // dev コピー (native Resources を直参照) はタイポ済み実ファイルに当たる。
-  if (key.startsWith("diph_")) return [key, key + "wav"];
+  if (key.startsWith("diph_")) names.push(key + "wav" + SAMPLE_EXT);
   // P12: my行は録音待ち — cv_my<v> が無ければ cv_m<v> (み/も) で代用。
   // コウさんが cv_myi/cv_myo を録音して置けば、自動的に本来の音へ置き替わる。
   const my = key.match(/^cv_my([aiueo])$/);
-  if (my) return [key, "cv_m" + my[1]];
-  return [key];
+  if (my) names.push("cv_m" + my[1] + SAMPLE_EXT);
+  return names;
 }
 // Phase 1: fetch (gesture 不要なのでページロード直後に並列で始める)
 async function fetchSample(key) {
   if (rawCache.has(key)) return;
   for (const name of sampleUrlCandidates(key)) {
     try {
-      const res = await fetch(SAMPLE_BASE + name + SAMPLE_EXT);
+      const res = await fetch(SAMPLE_BASE + name);
       if (res.ok) { rawCache.set(key, await res.arrayBuffer()); break; }
     } catch (e) { /* try next candidate */ }
   }
@@ -1714,6 +1728,664 @@ function analyzeMoras(moras) {
   return plan;
 }
 
+// ═══════════════════ native 音声レンダラ (v13, 2026-07-16) ═══════════════════
+// OnomatoiCore の FormantSynth.render + ConsonantSampleBank を JS へ移植した
+// サンプル精度のオフライン合成。語全体を 1 つの Float32Array に描き、1 ノードで再生する
+// (モーラ個別ノードのスケジュールではなく、native/iPad と同じ「1テイク継続」が成立する)。
+//
+// 正本は Swift 側 (FormantSynth.swift / ConsonantSampleBank.swift)。関数名・分岐順・定数を
+// 意図的に一致させ、native の設計改訂に diff で追従できるようにしている
+// (2026-07-14 の教訓: web の音質差は「native の設計改訂への追従」で決まる)。
+//
+// 移植しないもの (意図的):
+//  - warabe 音程バリアント (pitchedX / varispeed / 音程クロスフェード) — web は音程固定
+//  - フォルマント合成フォールバック — サンプルが無い区間は無音 (web は全サンプル前提)
+//  - 摩擦延長テイク (cv_sQs)・V-Q・V-N — web に録音アセットが無い (native も無ければ同じ経路)
+//
+// bank (plain object): { sr, cv: Map("onset|nucleus"→Float32Array), v: Map, nN, contN: Map,
+//   diph: Map("v1v2"→生配列), cvDiph: Map("v1v2"→整形済み), longDiph: Set("v1v2") }
+// contN (v_<v>_nn) はベイク済み mp3 (scripts/bake_contn.py = prepareContN B′) をそのまま使う。
+
+const NV_SAMPLE_FADE_IN_MS = 5;    // FormantSynth.sampleFadeInMs
+const NV_SAMPLE_FADE_OUT_MS = 15;  // FormantSynth.sampleFadeOutMs
+const NV_EVENT_FADE_IN_MS = 5;     // FormantSynth.eventFadeInMs
+
+// interpolate (ConsonantSampleBank): 線形補間・末尾を越えたら null (native は nil → 次分岐)
+function nvInterp(arr, sr, tSec) {
+  if (!arr || arr.length === 0) return null;
+  const idx = tSec * sr;
+  if (idx < 0) return arr[0];
+  const i0 = Math.floor(idx);
+  if (i0 >= arr.length - 1) return null;
+  const frac = idx - i0;
+  return arr[i0] * (1 - frac) + arr[i0 + 1] * frac;
+}
+function nvDur(arr, sr) { return arr ? arr.length / sr : 0; }
+
+function nvSampleEnvelope(timeMs, totalMs) {
+  if (timeMs < NV_SAMPLE_FADE_IN_MS) return Math.max(0, timeMs / NV_SAMPLE_FADE_IN_MS);
+  const remaining = totalMs - timeMs;
+  if (remaining < NV_SAMPLE_FADE_OUT_MS) return Math.max(0, remaining / NV_SAMPLE_FADE_OUT_MS);
+  return 1.0;
+}
+
+// 録音長を超えた時刻を母音定常部で往復 (ピンポン) — FormantSynth.sustainWrap
+function nvSustainWrap(t, duration) {
+  if (duration <= 0.12) return t;
+  const edge = 0.02;
+  const loopEnd = duration - edge;
+  if (t <= loopEnd) return t;
+  const win = Math.min(0.18, loopEnd * 0.5);
+  const loopStart = loopEnd - win;
+  const phase = (t - loopEnd) % (2 * win);
+  return phase < win ? loopEnd - phase : loopStart + (phase - win);
+}
+
+function nvContNPreRollMs(prevDurationMs) { return Math.min(100.0, prevDurationMs * 0.5); }
+
+// bpmQuantized (PhonosymbolicEvent): 促音は原寸 (断ちの音価)・gap は 1 拍・他は 1 拍
+function nvQuantizeMoras(moras, targetMoraMs) {
+  return moras.map(m => {
+    if (m.isQ) return m;
+    return { ...m, durationMs: targetMoraMs, gapMs: m.gapMs > 0 ? targetMoraMs : 0 };
+  });
+}
+
+// prev→cur が長母音の一歩か (同一母音、長 e = e→i、長 o = o→u) — isLongVowelStep
+function nvIsLongVowelStep(prev, cur) {
+  if (prev.isN || prev.isSilentRest || cur.isSilentRest) return false;
+  return prev.nucleus === cur.nucleus ||
+         (prev.nucleus === "e" && cur.nucleus === "i") ||
+         (prev.nucleus === "o" && cur.nucleus === "u");
+}
+
+// 語中の ん の継続撥音キー (直前が母音モーラならその母音) — continuationNVowel
+function nvContinuationNVowel(idx, moras) {
+  if (idx <= 0 || idx >= moras.length || !moras[idx].isN) return null;
+  const prev = moras[idx - 1];
+  if (prev.isN || prev.isSilentRest) return null;
+  return prev.nucleus;
+}
+
+// 現モーラの母音 run の根に子音があるか — vowelRunRootHasOnset
+function nvVowelRunRootHasOnset(idx, moras) {
+  let root = idx;
+  while (root > 0 && moras[root].onset === null && !moras[root].isN &&
+         nvIsLongVowelStep(moras[root - 1], moras[root])) {
+    root--;
+  }
+  return moras[root].onset !== null;
+}
+
+// 母音根の拡張 run (aauu/aaii/oouu/eeii/ooii) を長尺録音 cvDiph が受け持つか —
+// extendedVRunTakesCvDiph (core v8, 2026-07-16)
+function nvExtendedVRunTakesCvDiph(idx, moras, bank) {
+  if (idx < 0 || idx + 1 >= moras.length) return false;
+  const cur = moras[idx], next = moras[idx + 1];
+  if (cur.onset !== null || cur.isN || cur.isSilentRest) return false;
+  if (next.onset !== null || next.isN || next.isSilentRest) return false;
+  if (cur.nucleus === next.nucleus) return false;
+  if (!bank.longDiph.has(cur.nucleus + next.nucleus)) return false;
+  if (nvVowelRunRootHasOnset(idx, moras)) return false;   // 子音アンカー列は従来判定が担う
+  let v1First = idx;
+  while (v1First > 0) {
+    const p = moras[v1First - 1];
+    if (p.onset !== null || p.isN || p.isSilentRest || p.nucleus !== cur.nucleus) break;
+    v1First--;
+  }
+  if (idx - v1First + 1 >= 2) return true;
+  let v2Last = idx + 1;
+  while (v2Last + 1 < moras.length) {
+    const n = moras[v2Last + 1];
+    if (n.onset !== null || n.isN || n.isSilentRest || n.nucleus !== next.nucleus) break;
+    v2Last++;
+  }
+  return v2Last - idx >= 2;
+}
+
+// V+V diph (パターン1) が idx を引き受けるか — vvDiphPart1Takes
+function nvVvDiphPart1Takes(idx, moras, bank) {
+  if (idx < 0 || idx + 1 >= moras.length) return false;
+  const cur = moras[idx], next = moras[idx + 1];
+  if (cur.onset !== null || cur.isN || cur.isSilentRest) return false;
+  if (next.onset !== null || next.isN || next.isSilentRest) return false;
+  if (!bank.diph.has(cur.nucleus + next.nucleus)) return false;
+  if (nvExtendedVRunTakesCvDiph(idx, moras, bank)) return false;   // 長尺録音側へ譲る (v8)
+  return !nvVowelRunRootHasOnset(idx, moras);
+}
+function nvNextTakenByVVDiph(idx, moras, bank) { return nvVvDiphPart1Takes(idx + 1, moras, bank); }
+
+// CV→V (整形済み cvDiph) の選択キー — cvDiphPrev (v8: 母音根の拡張 run も bank 判定で通す)
+function nvCvDiphPrev(idx, moras, bank) {
+  if (idx <= 0 || idx >= moras.length) return null;
+  const m = moras[idx];
+  if (m.onset !== null || m.isN || m.isSilentRest) return null;
+  let first = idx;
+  while (first > 0) {
+    const p = moras[first - 1];
+    if (p.onset !== null || p.isN || p.isSilentRest || p.nucleus !== m.nucleus) break;
+    first--;
+  }
+  if (first <= 0) return null;
+  const prev = moras[first - 1];
+  if (prev.isN || prev.isSilentRest || prev.nucleus === m.nucleus) return null;
+  if (!nvVowelRunRootHasOnset(first - 1, moras) &&
+      !nvExtendedVRunTakesCvDiph(first - 1, moras, bank)) return null;
+  let offset = 0;
+  for (let i = first; i < idx; i++) offset += moras[i].durationMs;
+  return { v1: prev.nucleus, v2: m.nucleus, prevDurationMs: prev.durationMs,
+           timeOffsetMs: offset, diphMoraDurationMs: moras[first].durationMs };
+}
+
+// 現モーラの diph run が語末で終わるか + 延長モーラを含むか — cvDiphRunShape
+function nvCvDiphRunShape(idx, moras) {
+  const nucleus = moras[idx].nucleus;
+  let last = idx;
+  while (last + 1 < moras.length) {
+    const n = moras[last + 1];
+    if (n.onset !== null || n.isN || n.isSilentRest || n.nucleus !== nucleus) break;
+    last++;
+  }
+  let first = idx;
+  while (first > 0) {
+    const p = moras[first - 1];
+    if (p.onset !== null || p.isN || p.isSilentRest || p.nucleus !== nucleus) break;
+    first--;
+  }
+  const isWordFinal = last === moras.length - 1 || !!moras[last + 1].isSilentRest;
+  return { isWordFinal, hasExtension: last > first };
+}
+
+// 次モーラが長母音延長を使うか — nextUsesLongVowelExtension
+function nvNextUsesLongVowelExtension(idx, moras) {
+  const cur = moras[idx];
+  if (cur.isN || cur.isSilentRest || idx + 1 >= moras.length) return false;
+  const next = moras[idx + 1];
+  if (next.onset !== null || next.isN || next.isSilentRest) return false;
+  return cur.nucleus === next.nucleus ||
+         (cur.nucleus === "e" && next.nucleus === "i") ||
+         (cur.nucleus === "o" && next.nucleus === "u");
+}
+
+// 次モーラが CV→V diph (整形済み) を使うか — nextUsesCVtoVDiph (v8 拡張 run 込み)
+function nvNextUsesCVtoVDiph(idx, moras, bank) {
+  const cur = moras[idx];
+  if (cur.isN || cur.isSilentRest || idx + 1 >= moras.length) return false;
+  if (!nvVowelRunRootHasOnset(idx, moras) &&
+      !nvExtendedVRunTakesCvDiph(idx, moras, bank)) return false;
+  const next = moras[idx + 1];
+  if (next.onset !== null || next.isN || next.isSilentRest) return false;
+  return bank.diph.has(cur.nucleus + next.nucleus);
+}
+
+// CV→V boundary の 2 モーラ目か (fade-in 抑制用・現行パターンでは常に false 側) — isCVtoVDiphSecondMora
+function nvIsCVtoVDiphSecondMora(idx, moras, bank) {
+  const m = moras[idx];
+  if (m.onset !== null || m.isN || idx <= 0) return false;
+  const prev = moras[idx - 1];
+  if (prev.onset === null || prev.isN) return false;
+  return bank.diph.has(prev.nucleus + m.nucleus);
+}
+
+// 連続母音 (生 diph) 検出 — diphContext (パターン3=CV→V 逆算は native 2026-07-06 で廃止済み)
+// 戻り値の baseMs: 再生時刻 = baseMs + モーラ内時刻 (パターン2 は前モーラ長ぶん進んだ位置から)
+function nvDiphContext(idx, moras, bank) {
+  const m = moras[idx];
+  if (nvVvDiphPart1Takes(idx, moras, bank)) {
+    const next = moras[idx + 1];
+    return { v1: m.nucleus, v2: next.nucleus, baseMs: 0,
+             envTotalMs: m.durationMs + next.durationMs };
+  }
+  if (idx > 0 && nvVvDiphPart1Takes(idx - 1, moras, bank)) {
+    const prev = moras[idx - 1];
+    return { v1: prev.nucleus, v2: m.nucleus, baseMs: prev.durationMs,
+             envTotalMs: prev.durationMs + m.durationMs };
+  }
+  return null;
+}
+
+// 長母音延長 — longVowelExtension (根まで遡り 1 テイク継続・v7.15 の同母音 run 根切替込み)
+function nvLongVowelExtension(idx, moras) {
+  const m = moras[idx];
+  if (m.onset !== null || m.isN || m.isSilentRest || idx <= 0) return null;
+  if (!nvIsLongVowelStep(moras[idx - 1], m)) return null;
+  let root = idx - 1;
+  while (root > 0 && moras[root].onset === null && !moras[root].isN &&
+         nvIsLongVowelStep(moras[root - 1], moras[root])) {
+    root--;
+  }
+  // v7.15: 直前が同じ母音なのに根が別母音 (oouu の 4 モーラ目) は同一母音 run の先頭を根に
+  let sourceSwitched = false;
+  if (moras[root].nucleus !== m.nucleus && moras[idx - 1].nucleus === m.nucleus) {
+    let sameRoot = idx - 1;
+    while (sameRoot > 0 && moras[sameRoot - 1].onset === null && !moras[sameRoot - 1].isN &&
+           !moras[sameRoot - 1].isSilentRest && moras[sameRoot - 1].nucleus === m.nucleus) {
+      sameRoot--;
+    }
+    root = sameRoot;
+    sourceSwitched = true;
+  }
+  let baseMs = 0;
+  for (let i = root; i < idx; i++) baseMs += moras[i].durationMs;
+  let last = idx;
+  while (last + 1 < moras.length && moras[last + 1].onset === null && !moras[last + 1].isN &&
+         nvIsLongVowelStep(moras[last], moras[last + 1])) {
+    last++;
+  }
+  let totalMs = 0;
+  for (let i = root; i <= last; i++) totalMs += moras[i].durationMs;
+  return { sourceOnset: moras[root].onset, sourceNucleus: moras[root].nucleus,
+           baseMs, totalMs, sourceSwitched };
+}
+
+// CV サンプルのルックアップ (bufferFor と同じフォールバック: my→m行・/a/ 代用)
+function nvCvArr(bank, onset, nucleus) {
+  let arr = bank.cv.get(onset + "|" + nucleus);
+  if (!arr && onset === "my") arr = bank.cv.get("m|" + nucleus);
+  if (!arr) arr = bank.cv.get(onset + "|a");
+  return arr || null;
+}
+
+// 長母音延長のサンプル読み出し — readLongVowelExtensionSample (音程バリアント無し版)。
+// 長い持続テイク (v_aaaa 等 ≥0.6s) が根の母音にあれば、子音根でも延長の本体はそれで伸ばす。
+function nvReadLongVowelExtensionSample(bank, ext, timeMs) {
+  const vArr = bank.v.get(ext.sourceNucleus);
+  const sustainDur = nvDur(vArr, bank.sr);
+  if (sustainDur >= 0.6) {
+    return nvInterp(vArr, bank.sr, nvSustainWrap(timeMs / 1000.0, sustainDur));
+  }
+  const srcArr = ext.sourceOnset !== null
+    ? nvCvArr(bank, ext.sourceOnset, ext.sourceNucleus) : vArr;
+  const d = nvDur(srcArr, bank.sr);
+  return nvInterp(srcArr, bank.sr, nvSustainWrap(timeMs / 1000.0, d));
+}
+
+// 末尾無音トリム — trimTrailingSilence (subarray ビュー・コピーなし)
+function nvTrimTrailingSilence(arr, thresholdAbs, keepSamples) {
+  let end = arr.length;
+  while (end > 0 && Math.abs(arr[end - 1]) < thresholdAbs) end--;
+  if (end === 0) return arr;
+  return arr.subarray(0, Math.min(arr.length, end + keepSamples));
+}
+
+// 移行開始検出 v2 (母音→母音・頭定常基準) — detectTransitionStart
+function nvDetectTransitionStart(arr, sr, dropDb, leadSec) {
+  const win = Math.max(1, Math.round(sr * 0.010));
+  if (arr.length < win * 24) return 0;
+  const rms = [];
+  for (let i = 0; i + win <= arr.length; i += win) {
+    let s = 0;
+    for (let j = i; j < i + win; j++) { const v = arr[j]; s += v * v; }
+    rms.push(Math.sqrt(s / win));
+  }
+  const headEnd = Math.min(22, rms.length - 1);
+  const head = rms.slice(2, headEnd);
+  if (!head.length) return 0;
+  const headMean = head.reduce((a, b) => a + b, 0) / head.length;
+  if (headMean <= 1e-6) return 0;
+  const threshold = headMean * Math.pow(10, -dropDb / 20);
+  let k = headEnd;
+  while (k + 1 < rms.length) {
+    if (rms[k] < threshold && rms[k + 1] < threshold) break;
+    k++;
+  }
+  return Math.max(0, k * 0.010 - leadSec);
+}
+
+// CV→V diph の整形 — prepareContN の diph パラメータ版 (headDb -12 / tailDb -15 /
+// 頭定常検出 / リード -40ms / liftCap 無制限 [+30dB のみ])。contN 用の RMS/スペクトル
+// 検出パスは web ではベイク済み mp3 (bake_contn.py) が担うため移植しない。
+function nvPrepareCvDiph(raw, sr) {
+  const headDb = -12.0, tailDb = -15.0;
+  let trimmed = nvTrimTrailingSilence(raw, 0.004, Math.round(sr * 0.01));
+  if (trimmed.length <= Math.floor(sr * 0.05)) return new Float32Array(trimmed);
+  const startSec = nvDetectTransitionStart(trimmed, sr, 3.0, -0.04);
+  const startIdx = Math.min(trimmed.length - 1, Math.floor(startSec * sr));
+  const arr = new Float32Array(trimmed.subarray(startIdx));
+  const win = Math.max(1, Math.round(sr * 0.010));
+  if (arr.length < win * 3) return arr;
+  const env = [];
+  for (let i = 0; i < arr.length; i += win) {
+    const hi = Math.min(arr.length, i + win);
+    let s = 0;
+    for (let j = i; j < hi; j++) { const v = arr[j]; s += v * v; }
+    env.push(Math.max(1e-6, Math.sqrt(s / (hi - i))));
+  }
+  const smooth = env.slice();
+  for (let k = 1; k < env.length - 1; k++) smooth[k] = (env[k - 1] + env[k] + env[k + 1]) / 3;
+  const liftCap = Math.pow(10, 30 / 20);   // liftCapDb=nil → 絶対上限 +30dB のみ
+  const n = arr.length;
+  for (let idx = 0; idx < n; idx++) {
+    const t = idx / (n - 1);
+    const targetDb = headDb + (tailDb - headDb) * t;
+    const target = Math.pow(10, targetDb / 20);
+    const fpos = idx / win;
+    const k0 = Math.min(smooth.length - 1, Math.floor(fpos));
+    const k1 = Math.min(smooth.length - 1, k0 + 1);
+    const frac = fpos - k0;
+    const e = smooth[k0] * (1 - frac) + smooth[k1] * frac;
+    const gain = Math.min(liftCap, target / e);
+    arr[idx] *= gain;
+  }
+  return arr;
+}
+
+// ─── オフライン合成本体 — FormantSynth.render の per-frame 分岐の移植 ───
+// 分岐の選択 (モーラ単位で不変) は事前計画し、フレーム内は時刻・包絡・読み出しだけを行う。
+// 数式・定数・分岐順は native と同一 (音程バリアント/フォルマント合成のみ非対応)。
+function nvRenderEvent(morasRaw, bank, sr, targetMoraMs) {
+  const moras = nvQuantizeMoras(morasRaw, targetMoraMs);
+  if (!moras.length) return null;
+  const spans = [];
+  let acc = 0;
+  for (const m of moras) {
+    const span = m.gapMs + m.durationMs;
+    spans.push({ start: acc, gapMs: m.gapMs, durMs: m.durationMs });
+    acc += span;
+  }
+  const totalMs = acc;
+  const frames = Math.ceil((totalMs + 60) / 1000 * sr);   // +60ms 無音パッド
+  const out = new Float32Array(frames);
+
+  // モーラ単位の計画 (native render の guard 順そのまま)
+  const plans = moras.map((m, i) => {
+    const plan = { kind: "silent" };
+    if (m.isSilentRest) return plan;
+    if (m.isN) {
+      const contV = nvContinuationNVowel(i, moras);
+      if (contV !== null && bank.contN.has(contV)) {
+        let isWordFinalN = true;
+        for (let j = i + 1; j < moras.length; j++) {
+          if (!moras[j].isSilentRest) { isWordFinalN = false; break; }
+        }
+        return { kind: "contN", arr: bank.contN.get(contV),
+                 prevDurMs: moras[i - 1].durationMs, isWordFinalN };
+      }
+      if (bank.nN) return { kind: "nN", arr: bank.nN };
+      return plan;
+    }
+    if (m.onset !== null) {
+      const arr = nvCvArr(bank, m.onset, m.nucleus);
+      if (arr) {
+        const suppressTail =
+          (nvNextUsesLongVowelExtension(i, moras) && !nvNextTakenByVVDiph(i, moras, bank))
+          || nvNextUsesCVtoVDiph(i, moras, bank);
+        return { kind: "cv", arr, suppressTail };
+      }
+      return plan;
+    }
+    // 以下 onset === null (母音モーラ)
+    const cvd = nvCvDiphPrev(i, moras, bank);
+    if (cvd) {
+      const arr = bank.cvDiph.get(cvd.v1 + cvd.v2);
+      if (arr) {
+        const next = i + 1 < moras.length ? moras[i + 1] : null;
+        const continuesRun = !!(next && next.onset === null && !next.isN &&
+                                !next.isSilentRest && next.nucleus === m.nucleus);
+        return { kind: "cvDiph", cvd, arr, dur: nvDur(arr, sr),
+                 runShape: nvCvDiphRunShape(i, moras), continuesRun };
+      }
+    }
+    const diph = nvDiphContext(i, moras, bank);
+    if (diph && bank.diph.has(diph.v1 + diph.v2)) {
+      return { kind: "diph", diph, arr: bank.diph.get(diph.v1 + diph.v2),
+               isCVtoV: nvIsCVtoVDiphSecondMora(i, moras, bank) };
+    }
+    const ext = nvLongVowelExtension(i, moras);
+    if (ext) {
+      let cvXfade = null;
+      if (ext.sourceOnset !== null && moras[i - 1].onset !== null &&
+          nvDur(bank.v.get(ext.sourceNucleus), sr) >= 0.6) {
+        const cvArr = nvCvArr(bank, ext.sourceOnset, ext.sourceNucleus);
+        if (cvArr) cvXfade = { arr: cvArr, dur: nvDur(cvArr, sr) };
+      }
+      return { kind: "ext", ext, cvXfade,
+               extSuppressTail: nvNextUsesCVtoVDiph(i, moras, bank) };
+    }
+    const vArr = bank.v.get(m.nucleus);
+    if (vArr) {
+      const suppressTail =
+        (nvNextUsesLongVowelExtension(i, moras) && !nvNextTakenByVVDiph(i, moras, bank))
+        || nvNextUsesCVtoVDiph(i, moras, bank);
+      return { kind: "v", arr: vArr, suppressTail };
+    }
+    return plan;
+  });
+
+  // 先行オーバーラップ / preQ の計画 (現モーラ側に持たせる)
+  const posts = moras.map((m, i) => {
+    const next = i + 1 < moras.length ? moras[i + 1] : null;
+    const post = { contNArr: null, cvDiphArr: null, nextHasQ: false };
+    if (!next) return post;
+    if (next.isN && !m.isN && !m.isSilentRest && bank.contN.has(m.nucleus) &&
+        nvContinuationNVowel(i + 1, moras) !== null) {
+      post.contNArr = bank.contN.get(m.nucleus);
+    }
+    if (nvNextUsesCVtoVDiph(i, moras, bank)) {
+      post.cvDiphArr = bank.cvDiph.get(m.nucleus + next.nucleus) || null;
+    }
+    post.nextHasQ = next.gapMs > 0;
+    return post;
+  });
+
+  let mi = 0;
+  for (let f = 0; f < frames; f++) {
+    const tMs = f / sr * 1000;
+    if (tMs >= totalMs) break;   // 残りはパッド (無音)
+    while (mi + 1 < moras.length && tMs >= spans[mi].start + spans[mi].gapMs + spans[mi].durMs) mi++;
+    const m = moras[mi], plan = plans[mi], post = posts[mi];
+    const tin = tMs - spans[mi].start;
+    const eventFade = Math.sin(Math.min(1, tMs / NV_EVENT_FADE_IN_MS) * Math.PI / 2);
+    if (tin < m.gapMs) { out[f] = 0; continue; }   // 促音 gap = 閉鎖 (V-Q テイク無し → 無音)
+    const phoneT = tin - m.gapMs;
+    const amp = m.amplitude;
+    let val = 0;
+
+    if (plan.kind === "contN") {
+      const preRoll = nvContNPreRollMs(plan.prevDurMs);
+      const dur = nvDur(plan.arr, sr);
+      let value = nvInterp(plan.arr, sr, nvSustainWrap((preRoll + phoneT) / 1000, dur));
+      if (value === null) value = 0;
+      let env = nvSampleEnvelope(phoneT + NV_SAMPLE_FADE_IN_MS,
+                                 m.durationMs + NV_SAMPLE_FADE_IN_MS);
+      const fadeStart = m.durationMs * (plan.isWordFinalN ? 0.35 : 0.30);
+      const fadeSpan = Math.max(1, m.durationMs * (plan.isWordFinalN ? 0.65 : 0.25));
+      if (phoneT > fadeStart) {
+        const u = Math.min(1, (phoneT - fadeStart) / fadeSpan);
+        const c = Math.cos(u * Math.PI / 2);
+        env *= c * c;
+      }
+      val = value * amp * env * eventFade;
+    } else if (plan.kind === "nN") {
+      const value = nvInterp(plan.arr, sr, phoneT / 1000);
+      const env = nvSampleEnvelope(phoneT, m.durationMs);
+      val = (value === null ? 0 : value) * amp * env * eventFade;
+    } else if (plan.kind === "cv") {
+      const value = nvInterp(plan.arr, sr, phoneT / 1000);
+      const envTotal = plan.suppressTail
+        ? m.durationMs + NV_SAMPLE_FADE_OUT_MS + 5 : m.durationMs;
+      const env = nvSampleEnvelope(phoneT, envTotal);
+      val = (value === null ? 0 : value) * amp * env * eventFade;
+    } else if (plan.kind === "cvDiph") {
+      const cvd = plan.cvd;
+      const preRoll = nvContNPreRollMs(cvd.prevDurationMs);
+      let value = nvInterp(plan.arr, sr,
+        nvSustainWrap((preRoll + cvd.timeOffsetMs + phoneT) / 1000, plan.dur));
+      if (value === null) value = 0;
+      const envTotal = plan.continuesRun
+        ? m.durationMs + NV_SAMPLE_FADE_OUT_MS + 5 : m.durationMs;
+      let env = nvSampleEnvelope(phoneT + NV_SAMPLE_FADE_IN_MS,
+                                 envTotal + NV_SAMPLE_FADE_IN_MS);
+      if (plan.runShape.isWordFinal) {
+        if (plan.runShape.hasExtension) {
+          // v7.14: run リリース開始 106% (saii 370ms から減衰)
+          const u = (cvd.timeOffsetMs + phoneT) / cvd.diphMoraDurationMs;
+          if (u > 1.06) {
+            const r = Math.min(1, (u - 1.06) / 0.45);
+            const c = Math.cos(r * Math.PI / 2);
+            env *= c * c;
+          }
+        } else {
+          // v7.11: 単独 diph モーラは 22% からリリース
+          const u = phoneT / m.durationMs;
+          if (u > 0.22) {
+            const r = Math.min(1, (u - 0.22) / 0.73);
+            const c = Math.cos(r * Math.PI / 2);
+            env *= c * c;
+          }
+        }
+      }
+      val = value * amp * env * eventFade;
+    } else if (plan.kind === "diph") {
+      const t = plan.diph.baseMs + tin;
+      const value = nvInterp(plan.arr, sr, t / 1000);
+      const envT = plan.isCVtoV ? t + NV_SAMPLE_FADE_IN_MS + 1 : t;
+      const env = nvSampleEnvelope(envT, plan.diph.envTotalMs);
+      val = (value === null ? 0 : value) * amp * env * eventFade;
+    } else if (plan.kind === "ext") {
+      const ext = plan.ext;
+      const timeMs = ext.baseMs + phoneT;
+      let value = nvReadLongVowelExtensionSample(bank, ext, timeMs);
+      if (value === null) value = 0;
+      // CV根 → 長い持続母音テイクの handoff: 最初の延長モーラ頭を CV 継続と等パワー crossfade
+      if (plan.cvXfade) {
+        const xfadeMs = Math.min(45.0, m.durationMs * 0.6);
+        if (phoneT < xfadeMs) {
+          const cvT = nvSustainWrap(timeMs / 1000, plan.cvXfade.dur);
+          const cvVal = nvInterp(plan.cvXfade.arr, sr, cvT);
+          if (cvVal !== null) {
+            const u = phoneT / xfadeMs;
+            value = cvVal * Math.cos(u * Math.PI / 2) + value * Math.sin(u * Math.PI / 2);
+          }
+        }
+      }
+      const extEnvTotal = plan.extSuppressTail
+        ? ext.totalMs + NV_SAMPLE_FADE_OUT_MS + 5 : ext.totalMs;
+      let env = nvSampleEnvelope(timeMs, extEnvTotal);
+      // v7.15b: ソースが diph → v_<v> へ切り替わるモーラは頭 12ms をフェードイン
+      if (ext.sourceSwitched && phoneT < 12.0) env *= phoneT / 12.0;
+      val = value * amp * env * eventFade;
+    } else if (plan.kind === "v") {
+      const value = nvInterp(plan.arr, sr, phoneT / 1000);
+      const envTotal = plan.suppressTail
+        ? m.durationMs + NV_SAMPLE_FADE_OUT_MS + 5 : m.durationMs;
+      const env = nvSampleEnvelope(phoneT, envTotal);
+      val = (value === null ? 0 : value) * amp * env * eventFade;
+    }
+
+    // ─── 継続撥音の先行オーバーラップ (前モーラ末尾で ん を先行立ち上げ) ───
+    if (post.contNArr) {
+      const boundary = m.gapMs + m.durationMs;
+      const preRoll = nvContNPreRollMs(m.durationMs);
+      const tailT = tin - (boundary - preRoll);
+      if (tailT >= 0 && tailT < preRoll) {
+        const cv = nvInterp(post.contNArr, sr, tailT / 1000);
+        if (cv !== null) {
+          const u = tailT / preRoll;
+          const riseU = Math.min(1, u / 0.22);   // v7.5: ん の立ち上がりを加速
+          val = val * Math.cos(u * Math.PI / 2)
+              + cv * Math.sin(riseU * Math.PI / 2) * amp * eventFade;
+        }
+      }
+    }
+    // ─── CV→V diph の先行オーバーラップ ───
+    if (post.cvDiphArr) {
+      const boundary = m.gapMs + m.durationMs;
+      const preRoll = nvContNPreRollMs(m.durationMs);
+      const tailT = tin - (boundary - preRoll);
+      if (tailT >= 0 && tailT < preRoll) {
+        const dv = nvInterp(post.cvDiphArr, sr, tailT / 1000);
+        if (dv !== null) {
+          const u = tailT / preRoll;
+          val = val * Math.cos(u * Math.PI / 2)
+              + dv * Math.sin(u * Math.PI / 2) * amp * eventFade;
+        }
+      }
+    }
+    // ─── Pre-Q fade (次モーラが促音 gap を持つとき 50%→85% で閉鎖へ) ───
+    if (post.nextHasQ && !m.isN) {
+      const fadeStart = m.durationMs * 0.5;
+      const fadeEnd = m.durationMs * 0.85;
+      if (phoneT > fadeStart) {
+        const progress = Math.min(1, (phoneT - fadeStart) / Math.max(1, fadeEnd - fadeStart));
+        val *= Math.max(0, 1 - progress);
+      }
+    }
+    out[f] = val;
+  }
+
+  const moraSpans = moras.map((m, i) => ({
+    m, startSec: (spans[i].start + spans[i].gapMs) / 1000,
+    endSec: (spans[i].start + spans[i].gapMs + spans[i].durMs) / 1000,
+  }));
+  return { data: out, frames, totalSec: totalMs / 1000, moraSpans };
+}
+
+// ─── native レンダラの bank 構築と再生 (impure: sampleBank / AudioContext 依存) ───
+let nvBank = null, nvBankStamp = -1;
+function nvChan(key) { const b = sampleBank.get(key); return b ? b.getChannelData(0) : null; }
+function buildNativeVoiceBank(sr) {
+  const bank = { sr, cv: new Map(), v: new Map(), nN: null, contN: new Map(),
+                 diph: new Map(), cvDiph: new Map(), longDiph: new Set() };
+  for (const [key, buf] of sampleBank) {
+    if (!buf || !key.startsWith("cv_")) continue;
+    const onset = key.slice(3, -1), nucleus = key.slice(-1);
+    bank.cv.set(onset + "|" + nucleus,
+                nvTrimTrailingSilence(buf.getChannelData(0), 0.004, Math.round(sr * 0.01)));
+  }
+  for (const v of VOWELS) {
+    // native 同様: 長い持続テイク (v_aaaa 等) があれば母音サンプルとして優先
+    const arr = nvChan("v_" + v + v + v + v) || nvChan("v_" + v);
+    if (arr) bank.v.set(v, nvTrimTrailingSilence(arr, 0.004, Math.round(sr * 0.01)));
+    const nn = nvChan("v_" + v + "_nn");
+    if (nn) bank.contN.set(v, nn);   // ベイク済み → そのまま (native の prepared 相当)
+  }
+  bank.nN = nvChan("n_N");
+  for (const p of DIPH_PAIRS) {
+    const raw = nvChan("diph_" + p);
+    if (raw) bank.diph.set(p, raw);
+    const extRaw = nvChan("diph_" + p[0] + p[0] + p[1] + p[1]);
+    if (extRaw) {
+      const prepared = nvPrepareCvDiph(extRaw, sr);
+      if (prepared.length) { bank.cvDiph.set(p, prepared); bank.longDiph.add(p); }
+    } else if (raw) {
+      const prepared = nvPrepareCvDiph(raw, sr);   // 長尺が無いペアは生 diph から (native と同じ)
+      if (prepared.length) bank.cvDiph.set(p, prepared);
+    }
+  }
+  return bank;
+}
+// ?voice=legacy でモーラ個別再アタック (v12) へ戻せる。native レンダが失敗しても自動で legacy。
+function nativeVoiceMode() {
+  try {
+    const q = new URLSearchParams(location.search).get("voice");
+    if (q === "legacy" || q === "native") return q;
+  } catch (e) {}
+  return "native";
+}
+function scheduleEventNative(ctx, event) {
+  if (nvBankStamp !== sampleBank.size || !nvBank) {
+    nvBank = buildNativeVoiceBank(ctx.sampleRate);
+    nvBankStamp = sampleBank.size;
+  }
+  const bank = nvBank;
+  if (!bank || bank.cv.size === 0 || bank.v.size === 0) return false;
+  const moraSec = 30.0 / 120;   // legacy と同じ発話テンポ (BPM120 固定)
+  const res = nvRenderEvent(event.moras, bank, bank.sr, moraSec * 1000);
+  if (!res || !res.frames) return false;
+  const buf = ctx.createBuffer(1, res.data.length, bank.sr);
+  buf.getChannelData(0).set(res.data);
+  const t0 = ctx.currentTime + 0.04;
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  src.connect(ctx.destination);
+  src.start(t0);
+  activeNodes.push(src);
+  renderMouthTimeline(ctx, res.moraSpans.map(s => ({
+    m: s.m, start: t0 + s.startSec, end: t0 + s.endSec })));
+  return true;
+}
+
 // ─── 再生: BPM グリッド (1 mora = 30000/BPM ms, 発話テンポ統一) ───
 let activeNodes = [];
 function stopAll() {
@@ -1763,7 +2435,20 @@ function scheduleOne(ctx, buf, start, dur, amplitude, bufferOffsetSec = 0,
   src.stop(start + dur + 0.02);
   activeNodes.push(src);
 }
+// v13: 既定は native レンダラ (1テイク継続)。?voice=legacy で v12 (モーラ個別再アタック) へ、
+// bank 未構築/レンダ失敗時も自動で legacy へ (「うまくいかない場合は戻す」の構造的保証)。
 function scheduleEvent(ctx, event) {
+  stopAll();
+  if (nativeVoiceMode() === "native") {
+    try {
+      if (scheduleEventNative(ctx, event)) return;
+    } catch (e) {
+      console.warn("native voice renderer failed — falling back to legacy", e);
+    }
+  }
+  scheduleEventLegacy(ctx, event);
+}
+function scheduleEventLegacy(ctx, event) {
   stopAll();
   const bpm = 120;   // 2026-07-11: BPM ノブ廃止・120 固定 (発話テンポの個体差をデータから排除)
   const moraSec = 30.0 / bpm;             // 30000/BPM ms
@@ -1835,7 +2520,7 @@ function axesEqual(a, b) {
 // (Google Apps Script 等で公開ユーザーから収集したい場合用。空なら何もしない)。
 const FEEDBACK_ENDPOINT = "";
 const FB_VERSION = 4;          // v4: 口の2軸/描線頂点列/K・角・語形タグ/エンジン版を追加 (v3: reason)
-const ENGINE_VERSION = "v12";  // 生成/音声実現の版 (集計用)。v12 = 長母音を個別再アタック再生に戻した音声版 (生成ロジックは v11 と同一)
+const ENGINE_VERSION = "v13";  // 生成/音声実現の版 (集計用)。v13 = native FormantSynth 移植 (1テイク継続・語1バッファ合成)。生成ロジックは v11 と同一
 let feedbackLog = [];
 try { feedbackLog = JSON.parse(localStorage.getItem("onomatoi.feedback") || "[]"); } catch (e) {}
 let utteranceSeq = 0;
