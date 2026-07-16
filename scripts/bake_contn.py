@@ -99,6 +99,16 @@ def prepare_contn(raw, sr, head_db=-19.0, tail_db=-17.5, return_meta=False):
             while i > nasal_onset_idx:
                 if env[i] >= floor: last_good = i; break
                 i -= 1
+            # B' (2026-07-16, native ConsonantSampleBank と同一): 自然減衰の追尾 —
+            # floor (-15dB) を下回っても包絡が減衰し続けている間は実音とみなして残す
+            # (減衰する ん [v_i_nn 型] の後半を捨てない)。ノイズ床 (平坦) は即座に止まる。
+            def s_env(k):
+                lo2, hi2 = max(0, k-1), min(len(env)-1, k+1)
+                return sum(env[lo2:hi2+1]) / (hi2-lo2+1)
+            while (last_good+1 < len(env)
+                   and s_env(last_good+1) < s_env(last_good) * 0.966
+                   and s_env(last_good+1) > steady * 0.02):
+                last_good += 1
             cut = min(len(trimmed), (last_good+3)*win)
             if cut < len(trimmed): trimmed = trimmed[:cut]
     start_sec = max(0, nasal_onset_sec - 0.01)
@@ -114,6 +124,12 @@ def prepare_contn(raw, sr, head_db=-19.0, tail_db=-17.5, return_meta=False):
             i0 = hi
         smooth = env2[:]
         for k in range(1, len(env2)-1): smooth[k] = (env2[k-1]+env2[k]+env2[k+1])/3
+        # B' (2026-07-16): 持ち上げ量の上限 = 鼻音定常 (頭 120ms の中央値) に必要な
+        # 基準ゲイン +8dB。定常テイクは従来どおり満額正規化・減衰テイクは自然減衰を保ち
+        # 息/床を -17.5dBFS へ平坦化しない (「in 末尾の低いノイズ」の根治・native と同一)。
+        steady_head = sorted(smooth[:min(12, len(smooth))])
+        steady_lin = steady_head[len(steady_head)//2]
+        lift_cap = (10 ** (head_db/20) / max(steady_lin, 1e-6)) * 10 ** (8.0/20)
         n = len(arr)
         out = []
         for idx in range(n):
@@ -123,7 +139,7 @@ def prepare_contn(raw, sr, head_db=-19.0, tail_db=-17.5, return_meta=False):
             k0 = min(len(smooth)-1, int(fpos)); k1 = min(len(smooth)-1, k0+1)
             frac = fpos-k0
             e = smooth[k0]*(1-frac)+smooth[k1]*frac
-            gain = min(10**(30/20), target/e)
+            gain = min(min(10**(30/20), lift_cap), target/e)
             out.append(arr[idx]*gain)
         arr = out
     meta = {"onset_sec": nasal_onset_sec, "start_sec": start_sec, "method": method}
