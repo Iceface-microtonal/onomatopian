@@ -1182,25 +1182,58 @@ function strokeComplexity(points, w, h, maxMora = 16) {
   const cornerSharpness = csCount > 0
     ? Math.max(0, Math.min(1, (csSum / csCount - CORNER_THRESH) / (Math.PI - CORNER_THRESH)))
     : 0;
-  let totalTurning = 0, totalAbsTurning = 0;
+  let totalTurning = 0;
   for (let i = 1; i < points.length - 1; i++) {
     const v1x = points[i].x - points[i-1].x, v1y = points[i].y - points[i-1].y;
     const v2x = points[i+1].x - points[i].x, v2y = points[i+1].y - points[i].y;
     const cross = v1x * v2y - v1y * v2x, dot = v1x * v2x + v1y * v2y;
-    if (Math.abs(cross) > 1e-9 || Math.abs(dot) > 1e-9) {
-      const t = Math.atan2(cross, dot);
-      totalTurning += t;
-      totalAbsTurning += Math.abs(t);
-    }
+    if (Math.abs(cross) > 1e-9 || Math.abs(dot) > 1e-9) totalTurning += Math.atan2(cross, dot);
   }
   // rotationFraction (2026-07-15, P11 記号語彙): loops (整数丸め) は「半円=0.5」を「直線=0」と
   // 区別できない。開いた弧 (⊃⊂∩∪ 系) の判別には丸める前の生の回転量が要る。
   const rotationFraction = Math.abs(totalTurning) / (2 * Math.PI);
   // curveConsistency: 符号付き合計 (相殺後) / 絶対値合計 (相殺前)。1.0 = 常に同じ向きに
-  // 曲がる (弧) ・低い値 = 行ったり来たり (波・ジグザグ) で正味の回転が相殺されている。
-  // 正弦波は net rotationFraction だけでは弧と誤判別しうる (奇数ローブで相殺しきれない)
-  // ため、開いた弧の判別にはこちらも要る。
-  const curveConsistency = totalAbsTurning > 1e-9 ? Math.abs(totalTurning) / totalAbsTurning : 0;
+  // 曲がる (弧)・低い値 = 行ったり来たり (波・ジグザグ)。
+  // v2 (2026-07-16, Icefaceさん報告「⊂ が出にくい」の実測): 点単位の測定は手ブレに脆く、
+  // ±1.5px のジッタで実弧の cc が 0.33 (正弦波と同値!) まで崩壊・ペンの入り/抜きの 10px
+  // フックでも 0.56 に落ちて閾値 0.8 を通らない。**弧長リサンプル** (経路を ~24 等分の粗い
+  // 折れ線へ) + **端 5% トリム** (ペン尾の除外) で測る — ジッタは区間内で幾何的に消え、
+  // 正弦波/ジグザグの大きな反転は残る (実測: jitter5 の弧 cc 0.13→0.99・正弦波 0.33→0.33)。
+  const curveConsistency = (() => {
+    // 端 5% トリム (弧長基準)
+    let cum = [0];
+    for (let i = 1; i < points.length; i++)
+      cum.push(cum[i-1] + Math.hypot(points[i].x - points[i-1].x, points[i].y - points[i-1].y));
+    const L = cum[cum.length - 1];
+    if (L < 1e-6) return 0;
+    const lo = L * 0.08, hi = L * 0.92;   // 端 8% トリム (ペン尾 ~50px 級まで除外)
+    // 弧長 s の位置の点 (線形補間)
+    function at(s) {
+      let a = 0;
+      while (a < cum.length - 2 && cum[a + 1] < s) a++;
+      const span = Math.max(cum[a + 1] - cum[a], 1e-9);
+      const t = (s - cum[a]) / span;
+      return { x: points[a].x + (points[a+1].x - points[a].x) * t,
+               y: points[a].y + (points[a+1].y - points[a].y) * t };
+    }
+    const N = 16;   // 粗い折れ線 (ジッタが消えるスケール)
+    let rs = [];
+    for (let i = 0; i <= N; i++) rs.push(at(lo + (hi - lo) * i / N));
+    // 3点移動平均 1 パス (端は保持): 残留ジッタを均す。正弦波の大反転 (区間 >> 波長) は残る。
+    rs = rs.map((p, i) => (i === 0 || i === rs.length - 1) ? p
+      : { x: (rs[i-1].x + p.x + rs[i+1].x) / 3, y: (rs[i-1].y + p.y + rs[i+1].y) / 3 });
+    let net = 0, abs = 0;
+    for (let i = 1; i < rs.length - 1; i++) {
+      const v1x = rs[i].x - rs[i-1].x, v1y = rs[i].y - rs[i-1].y;
+      const v2x = rs[i+1].x - rs[i].x, v2y = rs[i+1].y - rs[i].y;
+      const cross = v1x * v2y - v1y * v2x, dot = v1x * v2x + v1y * v2y;
+      if (Math.abs(cross) > 1e-9 || Math.abs(dot) > 1e-9) {
+        const t = Math.atan2(cross, dot);
+        net += t; abs += Math.abs(t);
+      }
+    }
+    return abs > 1e-9 ? Math.abs(net) / abs : 0;
+  })();
   const loops = Math.round(rotationFraction);
   const elements = corners + loops;
   const comp = elements <= 4 ? elements : 4 + (elements - 4) * 0.5;
@@ -1222,7 +1255,11 @@ function openArcSignal(cx) {
   // loops (丸めた整数) は使わない — 半円超 (rotationFraction 0.5〜0.92) の弧が丸めで
   // loops=1 になり弾かれてしまう (⊃⊂∩∪ は半円よりだいぶ開いた弧で描かれうる)。
   // 丸める前の rotationFraction + curveConsistency (向きの一貫性) だけで判別する。
-  return cx.corners === 0 && !cx.isClosed
+  // v2 (2026-07-16「⊂が出にくい」): ペン尾のフックが**鈍い角1個** (実測 cs≈0.004〜0.1) として
+  // 検出され弧を弾いていた → 鈍い角1個までは許容。実頂点 (∧ は cs≥0.25) とは鋭さで分離され、
+  // S字 (cs≈0.245) は cc ゲートでも二重に除外される。
+  const cornersOK = cx.corners === 0 || (cx.corners === 1 && cx.cornerSharpness < 0.15);
+  return cornersOK && !cx.isClosed
     && cx.rotationFraction > 0.15 && cx.rotationFraction < 0.92
     && cx.curveConsistency > 0.8;   // 波/ジグザグの相殺した回転を弧と誤判別しない (3こぶ波対策)
 }
@@ -2468,7 +2505,8 @@ function parseMora(token, withQ) {
   const gapFor = c => withQ ? geminateGapMs(c) : 0;
   if (VOWELS.includes(token))
     return { onset: null, nucleus: token, durationMs: 180, gapMs: gapFor(null), amplitude: 1, isN: false };
-  for (const c2 of ["sh","ts","ch","ky","gy","ny"]) {
+  // my は P12 (2026-07-16) の新音素 (みゃ行)。myi=むぃ も実録音あり (myon→みょん が打てるように)。
+  for (const c2 of ["sh","ts","ch","ky","gy","ny","my"]) {
     if (token.startsWith(c2) && VOWELS.includes(token.slice(c2.length)))
       return { onset: c2, nucleus: token.slice(c2.length), durationMs: 180, gapMs: gapFor(c2), amplitude: 1, isN: false };
   }

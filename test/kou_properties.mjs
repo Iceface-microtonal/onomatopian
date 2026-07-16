@@ -103,7 +103,8 @@ const EXPORTS = ["extractAxes", "applyHandCorrection", "bucketedAxes", "densifie
   "splineDensified", "strokeComplexity", "drawK", "mannerProfile", "segmentStroke",
   "unitEligible", "generateFromUnits", "generate", "axesSeed", "mulberry32",
   "wordK", "romajiOf", "openArcSignal", "openChevronSignal",
-  "arcBulgeDirection", "arcSizeClass", "vocabEvent", "ARC_VOCAB", "CIRCLE_VOCAB"];
+  "arcBulgeDirection", "arcSizeClass", "vocabEvent", "ARC_VOCAB", "CIRCLE_VOCAB",
+  "segmentWord"];
 const ctx = vm.createContext({ console });
 vm.runInNewContext(
   engineSrc + `\n;globalThis.__api = { ${EXPORTS.join(", ")} };`,
@@ -519,6 +520,43 @@ const P11_CHECKS = [
     () => { const cx = cxOfPts(straightHPts);
             return !api.openArcSignal(cx) && !api.openChevronSignal(cx)
                 && p12VocabWord(straightHPts) === null; }],
+  // ─── cc v2 (2026-07-16 Icefaceさん報告「⊂が出にくい」): 手ブレ/ペン尾に頑健 ───
+  ["手ブレ ⊂ (jitter±5px) が openArc になる (cc v2: 弧長リサンプル+端トリムの回帰固定)",
+    () => {
+      const pts = [];
+      let rng = 7n * 2654435761n + 12345n;
+      const rnd = () => { rng = (rng * 6364136223846793005n + 1442695040888963407n) & 0xFFFFFFFFFFFFFFFFn;
+        return Number((rng >> 33n) & 0xFFFFn) / 32768.0 - 1.0; };
+      const sweep = 210 * Math.PI / 180, start = Math.PI - sweep / 2;
+      for (let i = 0; i <= 60; i++) {
+        const a = start + i / 60 * sweep, rr = 120 + 5 * rnd();
+        pts.push({ x: 180 + rr * Math.cos(a), y: 180 + rr * Math.sin(a) });
+      }
+      return api.openArcSignal(cxOfPts(pts))
+          && api.arcBulgeDirection(pts) === "left";
+    }],
+  ["ペン尾フック付き ⊂ (末尾30px) が openArc になる (端トリムの回帰固定)",
+    () => {
+      const sweep = 210 * Math.PI / 180, start = Math.PI - sweep / 2;
+      const pts = [];
+      for (let i = 0; i <= 60; i++) {
+        const a = start + i / 60 * sweep;
+        pts.push({ x: 180 + 120 * Math.cos(a), y: 180 + 120 * Math.sin(a) });
+      }
+      const aEnd = start + sweep, tang = aEnd + Math.PI / 2;
+      for (let k = 2; k <= 30; k += 4)
+        pts.push({ x: pts[pts.length-1].x + 4 * Math.cos(tang - 0.9),
+                   y: pts[pts.length-1].y + 4 * Math.sin(tang - 0.9) });
+      return api.openArcSignal(cxOfPts(pts));
+    }],
+  // ─── my の直接入力 (2026-07-16 Icefaceさん報告「myon→yon」の修正固定) ───
+  ["segmentWord: myon→みょん / myooo / myin (my がパーサに載る)",
+    () => {
+      const r = m => api.romajiOf({ moras: m });
+      return r(api.segmentWord("myon")) === "myon"
+          && r(api.segmentWord("myooo")) === "myooo"
+          && r(api.segmentWord("myin")) === "myin";
+    }],
 ];
 let p11Fail = 0;
 console.log("\nP11/P12 記号語彙サニティ (⊃⊂∩∪=コウさん語彙・円=aaan・＜＞∧∨=子音+ん・既存形は誤爆しない):");
