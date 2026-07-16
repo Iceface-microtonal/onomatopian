@@ -1275,7 +1275,9 @@ function strokeComplexity(points, w, h, maxMora = 16) {
   const base = 1 + Math.max(0, sizeRatio - 0.5) * 2 * sizeToLength;
   const rawMora = base + comp * sizeGate;
   const moraCount = Math.max(1, Math.min(maxMora, Math.round(rawMora)));
-  return { corners, loops, moraCount, cornerSharpness, isClosed, rotationFraction, curveConsistency };
+  // sizeRatio/pathRatio (2026-07-17): circleVocabSignal の紙面効率判定用 (native と同フィールド)
+  return { corners, loops, moraCount, cornerSharpness, isClosed, rotationFraction, curveConsistency,
+           sizeRatio, pathRatio: pathLen / Math.max(canvasDiag, 1) };
 }
 
 // ─── P11 記号語彙 (2026-07-15): ⊃⊂∩∪ (開いた弧) → 母音+ん / ＜＞∧∨ (開いた一角) → 子音+ん ───
@@ -1297,6 +1299,20 @@ function openArcSignal(cx) {
 }
 function openChevronSignal(cx) {
   return cx.corners === 1 && cx.loops === 0 && !cx.isClosed && cx.cornerSharpness >= 0.25;
+}
+// P12 完全な円 = aaan の判定 (2026-07-17 に純関数化+一周判定)。
+// 従来 (rotationFraction > 0.8 のみ) は多重ループの複雑な一筆 (渦・連ループ・二度なぞり) まで
+// 「完全な円」に吸われて aaan に潰れた (Icefaceさん報告 mrnps275-7: cor=0/lp=2 の連ループが
+// あああん になった)。円が「完成する」のは一周して閉じた瞬間だけ — 2周目以降は別の描写
+// (連ループ → 単位語経路が受け持つ)。
+// 判別は**紙面効率** pathRatio/sizeRatio (スケール不変): 円1周 ≈ 2.2・ペン尾込み1.1周 ≈ 2.5・
+// 2周なぞり/連ループ/渦 ≥ 3.5 → 閾値 3.2。rotationFraction の**上限は使えない** —
+// 閉ストロークは継ぎ目の巻き込みで 1.05周が 1.6〜1.9 に過大測定される (合成円で実測) ため、
+// 一周+ペン尾と真の2周を回転量では分離できない。
+function circleVocabSignal(cx, ax) {
+  return cx.isClosed && cx.corners === 0 && cx.rotationFraction > 0.8
+    && cx.pathRatio / Math.max(1e-6, cx.sizeRatio) < 3.2
+    && Math.abs(ax.round) <= 0.25 && ax.open >= 0.5;
 }
 
 // ─── P12 開いた弧の語彙 (2026-07-16 コウさん立法): 向き×大きさ → 固定語 ───
@@ -3122,8 +3138,7 @@ canvas.addEventListener("pointerup", ev => {
       vocabReason = uiLang === "ja"
         ? `開いた弧 ${dirJa}・${sizeJa} → ${vocabWord}（鼻音=柔らかさ・ん は円が完成するまで付かない）`
         : `open arc (${dir}, size ${sizeClass}) → ${vocabWord} (nasal = softness; no final N until the circle closes)`;
-    } else if (cx.isClosed && cx.corners === 0 && cx.rotationFraction > 0.8
-               && Math.abs(ax.round) <= 0.25 && ax.open >= 0.5) {
+    } else if (circleVocabSignal(cx, ax)) {
       vocabWord = CIRCLE_VOCAB;
       vocabReason = uiLang === "ja"
         ? `完全な円 → ${CIRCLE_VOCAB}（円が完成して初めて 収束の ん が立つ）`
