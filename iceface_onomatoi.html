@@ -155,6 +155,19 @@
   </div>
 </div>
 
+<!-- Romaji direct input (v11 で外し 2026-07-17 復活 — v13 native レンダラの実聴にも使う) -->
+<div class="panel">
+  <div class="row" style="margin-bottom:6px;">
+    <span class="panel-title" id="t-romaji-title">ROMAJI 直接入力</span>
+    <span class="hint" style="margin-left:auto;" id="t-romaji-hint">空白区切り、または語をそのまま。促音=Q, 撥音=n (例 don), 拗音=kya 等</span>
+  </div>
+  <div class="row">
+    <input id="romaji-input" type="text" value="bouba" autocapitalize="off" autocomplete="off" spellcheck="false">
+    <button id="btn-romaji" class="primary">▶ PLAY</button>
+  </div>
+  <div class="chips" id="romaji-chips"></div>
+</div>
+
 <!-- Feedback (👍👎 の収集と書き出し) -->
 <div class="panel">
   <div class="row">
@@ -268,6 +281,10 @@ function applyLangTexts() {
   document.getElementById("loading-note").textContent = T.loadingInitial;
   const reasonEl = document.getElementById("fb-reason");
   if (reasonEl) reasonEl.placeholder = T.fbReasonPH;
+  const rt = document.getElementById("t-romaji-title");
+  if (rt) rt.textContent = T.romajiTitle;
+  const rh = document.getElementById("t-romaji-hint");
+  if (rh) rh.textContent = T.romajiHint;
 }
 
 // ─── 音素 inventory (PhonosymbolicEvent.swift と対応) ───
@@ -3240,6 +3257,53 @@ function segmentWord(word) {
   }
   return moras;
 }
+// ─── ROMAJI 直接入力の再生 (v11 で外し 2026-07-17 復活) ───
+// 空白/ハイフン区切りのトークン列。トークンが単一モーラでなければ segmentWord の
+// greedy CV 自動分割へフォールバック (bouba も bo u ba も同じ)。促音=Q・撥音=n。
+function playRomaji() {
+  ensureCtx();
+  const tokens = document.getElementById("romaji-input").value
+    .trim().toLowerCase().split(/[\s\-_]+/).filter(Boolean);
+  const moras = [];
+  let pendingQ = false;
+  for (const tk of tokens) {
+    if (tk === "q") { pendingQ = true; continue; }
+    if (tk === "n" || tk === "nn") {
+      moras.push({ onset: null, nucleus: "a", durationMs: 160,
+                   gapMs: pendingQ ? 70 : 0, amplitude: 1, isN: true, isQ: false });
+      pendingQ = false; continue;
+    }
+    const m = parseMora(tk, pendingQ);
+    if (m) { moras.push(m); pendingQ = false; continue; }
+    // 単一モーラとして解釈できない (2文字超の塊、例 "bouba"/"aauu") → greedy 自動分割
+    const seg = segmentWord(tk);
+    if (seg.length > 0) {
+      if (pendingQ) seg[0] = { ...seg[0], gapMs: geminateGapMs(seg[0].onset) };
+      moras.push(...seg);
+    }
+    pendingQ = false;
+  }
+  if (moras.length === 0) return;
+  const ev = { axes: lastAxes, moras, baseF0: 200, isRedup: false };
+  playAndRemember(ev, lastAxes, false, "romaji");   // PLAY で同じ入力をリピート可能に
+}
+document.getElementById("btn-romaji").addEventListener("click", playRomaji);
+document.getElementById("romaji-input").addEventListener("keydown", e => {
+  if (e.key === "Enter") playRomaji();
+});
+const romajiQuick = ["bouba", "kiki", "aauu", "gooon", "don", "kakka",
+                     "kya kyo", "chapuchapu"];
+const rchips = document.getElementById("romaji-chips");
+for (const q of romajiQuick) {
+  const b = document.createElement("button");
+  b.textContent = q;
+  b.addEventListener("click", () => {
+    document.getElementById("romaji-input").value = q;
+    playRomaji();
+  });
+  rchips.appendChild(b);
+}
+
 // CLEAR (sketch + sliders リセット、log は保持 — iPad 版と同じ)
 document.getElementById("btn-clear").addEventListener("click", () => {
   stopAll();
