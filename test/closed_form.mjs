@@ -181,5 +181,53 @@ console.log("── 合成形 (jitter 込み・実描画条件) ──");
         JSON.stringify({ cor: cxZ.corners, closed: cxZ.isClosed }));
 }
 
+console.log("── Step2: 転回集中度 → 形の K (formK・P3 の形式化) ──");
+{
+  const f = beads => cxOf(beads).formK;
+  const triK = f(TRI), triKj = f(jittered(TRI));
+  check("三角 (実レポート) formK ≥ +0.3 (破裂圏)", triK !== null && triK >= 0.3,
+        `formK=${triK?.toFixed(2)}`);
+  check("三角 jitter でも安定 (±0.15)", triKj !== null && Math.abs(triKj - triK) < 0.15,
+        `formK=${triKj?.toFixed(2)}`);
+  const sq = [];
+  const cs4 = [[100, 100], [260, 100], [260, 260], [100, 260]];
+  for (let e = 0; e < 4; e++) {
+    const [ax, ay] = cs4[e], [bx, by] = cs4[(e + 1) % 4];
+    for (let t = 0; t < 10; t++) sq.push({ x: ax + (bx - ax) * t / 10, y: ay + (by - ay) * t / 10 });
+  }
+  sq.push({ x: 101, y: 102 });
+  const sqK = f(sq);
+  check("四角 formK ≥ +0.3", sqK !== null && sqK >= 0.3, `formK=${sqK?.toFixed(2)}`);
+  const circle = [];
+  for (let i = 0; i <= 72; i++) {
+    const t = i / 72 * 2 * Math.PI;
+    circle.push({ x: 180 + 120 * Math.cos(t), y: 180 + 120 * Math.sin(t) });
+  }
+  const cK = f(circle), cKj = f(jittered(circle));
+  check("円 formK ≤ −0.7 (ブーバ)", cK !== null && cK <= -0.7, `formK=${cK?.toFixed(2)}`);
+  check("円 jitter でも ≤ −0.7", cKj !== null && cKj <= -0.7, `formK=${cKj?.toFixed(2)}`);
+  const blob = [];
+  for (let i = 0; i <= 80; i++) {
+    const t = i / 80 * 2 * Math.PI;
+    const r = 110 + 14 * Math.sin(3 * t);
+    blob.push({ x: 180 + r * Math.cos(t), y: 180 + 0.8 * r * Math.sin(t) });
+  }
+  const bK = f(blob);
+  check("丸みブロブ formK ≤ −0.6", bK !== null && bK <= -0.6, `formK=${bK?.toFixed(2)}`);
+  // 渦 = 単純な輪郭ではない → formK null (軌跡層の担当。巻きパッドの接続跳びで
+  // 偽の角 +0.5 級が出る事故を紙面効率ゲート <3.2 で防ぐ — 実測で踏んだ)
+  const spiral = [];
+  for (let i = 0; i <= 160; i++) {
+    const t = i / 160 * 2.2 * 2 * Math.PI;
+    const r = 120 - 25 * (t / (2 * Math.PI));
+    spiral.push({ x: 180 + r * Math.cos(t), y: 180 + r * Math.sin(t) });
+  }
+  check("渦 (非単純形) は formK null = 正準化対象外", cxOf(spiral).formK === null);
+  // 開いた線も null (従来の軌跡 K)
+  const line = [];
+  for (let i = 0; i <= 30; i++) line.push({ x: 60 + i * 8, y: 120 + i * 3 });
+  check("開いた線は formK null", cxOf(line).formK === null);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

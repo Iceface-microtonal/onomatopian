@@ -1084,7 +1084,7 @@ function applyHandCorrection(ax, level, dampenTexture = true) {
 // ─── strokeComplexity (AxisExtractor.swift v3 の移植: 角+ループ+大きさ → モーラ数) ───
 function strokeComplexity(points, w, h, maxMora = 16) {
   if (points.length < 2 || w <= 0 || h <= 0)
-    return { corners: 0, loops: 0, moraCount: 1, cornerSharpness: 0, isClosed: false, rotationFraction: 0, curveConsistency: 0, sizeRatio: 0, pathRatio: 0, cornerPoints: [] };
+    return { corners: 0, loops: 0, moraCount: 1, cornerSharpness: 0, isClosed: false, rotationFraction: 0, curveConsistency: 0, sizeRatio: 0, pathRatio: 0, cornerPoints: [], formK: null };
   let minX = points[0].x, maxX = points[0].x, minY = points[0].y, maxY = points[0].y;
   for (const p of points) {
     minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
@@ -1097,7 +1097,7 @@ function strokeComplexity(points, w, h, maxMora = 16) {
     pathLen += Math.hypot(points[i].x - points[i-1].x, points[i].y - points[i-1].y);
   const sizeRatio = bboxDiag / Math.max(canvasDiag, 1);
   if (sizeRatio < 0.05 && pathLen < canvasDiag * 0.08)
-    return { corners: 0, loops: 0, moraCount: 1, cornerSharpness: 0, isClosed: false, rotationFraction: 0, curveConsistency: 0, sizeRatio: 0, pathRatio: 0, cornerPoints: [] };
+    return { corners: 0, loops: 0, moraCount: 1, cornerSharpness: 0, isClosed: false, rotationFraction: 0, curveConsistency: 0, sizeRatio: 0, pathRatio: 0, cornerPoints: [], formK: null };
   // 角 v2 (2026-07-10): 検出は従来 (閾値 0.83rad・近接抑制) + **ピークホールド** (肩でなく
   // 抑制窓内の折返し最大を鋭さに)。
   const k = Math.max(1, Math.min(Math.floor(points.length / 24), 8));
@@ -1118,7 +1118,10 @@ function strokeComplexity(points, w, h, maxMora = 16) {
   //     ※回転正準化 (最直線位置へ回す) 案は不採用: 全周に十分長い直線が無い形 (小さめの
   //       四角等) で回転先が角の隣になり、端除外と衝突して角を落とす (合成四角で実測)。
   let mClosed = 0;   // 閉形の実周点数 (パッド前)。0 = 開いた線 (従来どおり)
-  if (isClosed && points.length >= 8) {
+  // 正準化の対象は「単純な一周の輪郭」のみ (紙面効率 pathLen/bboxDiag < 3.2 — aaan ゲートと
+  // 同じ判定)。渦・多重ループ・二度なぞりは端点が偶然近くても輪郭ではない — 巻きパッドの
+  // 接続跳びが偽の角 (formK +0.5 級) を作る (合成渦で実測)。それらは軌跡層 (単位語経路) の担当。
+  if (isClosed && points.length >= 8 && pathLen / Math.max(1e-6, bboxDiag) < 3.2) {
     const step = pathLen / (points.length - 1);
     let end = points.length;
     while (end > 4 &&
@@ -1233,6 +1236,21 @@ function strokeComplexity(points, w, h, maxMora = 16) {
   // rotationFraction (2026-07-15, P11 記号語彙): loops (整数丸め) は「半円=0.5」を「直線=0」と
   // 区別できない。開いた弧 (⊃⊂∩∪ 系) の判別には丸める前の生の回転量が要る。
   const rotationFraction = Math.abs(totalTurning) / (2 * Math.PI);
+  // ─── Step2 (2026-07-17): 転回の集中度 → 形の K (P3「真の角→破裂/流れ→清音摩擦」の形式化) ───
+  // ブーバ/キキ=完成形の印象 (Icefaceさん方針)。閉じた輪郭の総転回 (凸形は必ず 2π) が
+  // 「どこに集中して通過するか」で音色を読む:
+  //   tc = Σ(真の角の転回ピーク) / 総転回 — 三角/四角 ≈1 (全転回が頂点に集中)・円 =0 (全周に
+  //        分散)・多重ループ/渦は分母が 2π を超えて薄まる (=柔らかい)。
+  //   cs = 角の鋭さ (三角 120°転回 > 四角 90°) が キキの強度を分ける。
+  // formK = −0.85 + 0.8·tc + 1.9·cs (clamp ±1)。アンカー: 円 −0.85 / 手描き四角 ≈+0.37 /
+  // 手描き三角 ≈+0.45 / 星 → +1。スケール・始点・向きに不変 (Step1 の正準化の上に立つ)。
+  // 開いた線 (formK=null) は従来どおり軌跡の K (drawK) — 線の描き方はそれ自体が知覚。
+  let formK = null;
+  if (mClosed > 0) {
+    const T = Math.max(Math.abs(totalTurning), 2 * Math.PI);
+    const tc = Math.min(1, csSum / T);
+    formK = Math.max(-1, Math.min(1, -0.85 + 0.8 * tc + 1.9 * cornerSharpness));
+  }
   // curveConsistency: 符号付き合計 (相殺後) / 絶対値合計 (相殺前)。1.0 = 常に同じ向きに
   // 曲がる (弧)・低い値 = 行ったり来たり (波・ジグザグ)。
   // v2 (2026-07-16, Icefaceさん報告「⊂ が出にくい」の実測): 点単位の測定は手ブレに脆く、
@@ -1286,9 +1304,11 @@ function strokeComplexity(points, w, h, maxMora = 16) {
   const moraCount = Math.max(1, Math.min(maxMora, Math.round(rawMora)));
   // sizeRatio/pathRatio (2026-07-17): circleVocabSignal の紙面効率判定用 (native と同フィールド)
   // cornerPoints (Step1): 判定に使った「形の角」の実座標 — ペンアップ後の確定○表示用
+  // formK (Step2): 完成形から読んだ K (閉形のみ・null=開いた線=従来の軌跡 K)
   return { corners, loops, moraCount, cornerSharpness, isClosed, rotationFraction, curveConsistency,
            sizeRatio, pathRatio: pathLen / Math.max(canvasDiag, 1),
-           cornerPoints: firedC.map(([fi]) => ({ x: points[fi].x, y: points[fi].y })) };
+           cornerPoints: firedC.map(([fi]) => ({ x: points[fi].x, y: points[fi].y })),
+           formK };
 }
 
 // ─── P11 記号語彙 (2026-07-15): ⊃⊂∩∪ (開いた弧) → 母音+ん / ＜＞∧∨ (開いた一角) → 子音+ん ───
@@ -2572,7 +2592,7 @@ function axesEqual(a, b) {
 // (Google Apps Script 等で公開ユーザーから収集したい場合用。空なら何もしない)。
 const FEEDBACK_ENDPOINT = "";
 const FB_VERSION = 4;          // v4: 口の2軸/描線頂点列/K・角・語形タグ/エンジン版を追加 (v3: reason)
-const ENGINE_VERSION = "v14";  // 生成/音声実現の版 (集計用)。v14 = 閉形の正準化 (Step1: 頂点=形の角・始点/向き不変)。v13 = native FormantSynth 移植 (1テイク継続・語1バッファ合成)
+const ENGINE_VERSION = "v15";  // 生成/音声実現の版 (集計用)。v15 = 転回集中度→形のK (Step2/P3形式化)。v14 = 閉形の正準化 (Step1)。v13 = native FormantSynth 移植
 let feedbackLog = [];
 try { feedbackLog = JSON.parse(localStorage.getItem("onomatoi.feedback") || "[]"); } catch (e) {}
 let utteranceSeq = 0;
@@ -3137,7 +3157,9 @@ canvas.addEventListener("pointerup", ev => {
     // P1: 角検出だけスプライン再構成幾何で行う (珠の継ぎ目の偽の角を除去)。
     const geomPts = (coarse && stroke.length >= 3) ? splineDensified(stroke, 6) : inkPts;
     const cx = strokeComplexity(geomPts, rect.width, rect.height, 16);
-    let kDraw = drawK(ax.sharp, cx.corners, cx.cornerSharpness);
+    // Step2: 閉形は完成形から読んだ K (formK) が軌跡 K (drawK) を置き換える —
+    // 「最終的な重みは見た目・出来上がった形」(Icefaceさん方針)。開いた線は従来どおり。
+    let kDraw = cx.formK != null ? cx.formK : drawK(ax.sharp, cx.corners, cx.cornerSharpness);
     if (coarse) kDraw = Math.round(kDraw / 0.125) * 0.125;   // K も同じ格子に
     // manner 次元 (2026-07-10): 描線の動態 → 子音の調音方法の親和。
     const mDraw = mannerProfile(ax.sharp, cx.corners, cx.cornerSharpness, ax.tex, cx.loops);
