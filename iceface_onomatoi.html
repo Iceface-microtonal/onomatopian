@@ -1084,7 +1084,7 @@ function applyHandCorrection(ax, level, dampenTexture = true) {
 // ─── strokeComplexity (AxisExtractor.swift v3 の移植: 角+ループ+大きさ → モーラ数) ───
 function strokeComplexity(points, w, h, maxMora = 16) {
   if (points.length < 2 || w <= 0 || h <= 0)
-    return { corners: 0, loops: 0, moraCount: 1, cornerSharpness: 0, isClosed: false, rotationFraction: 0, curveConsistency: 0 };
+    return { corners: 0, loops: 0, moraCount: 1, cornerSharpness: 0, isClosed: false, rotationFraction: 0, curveConsistency: 0, sizeRatio: 0, pathRatio: 0, cornerPoints: [] };
   let minX = points[0].x, maxX = points[0].x, minY = points[0].y, maxY = points[0].y;
   for (const p of points) {
     minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
@@ -1097,15 +1097,39 @@ function strokeComplexity(points, w, h, maxMora = 16) {
     pathLen += Math.hypot(points[i].x - points[i-1].x, points[i].y - points[i-1].y);
   const sizeRatio = bboxDiag / Math.max(canvasDiag, 1);
   if (sizeRatio < 0.05 && pathLen < canvasDiag * 0.08)
-    return { corners: 0, loops: 0, moraCount: 1, cornerSharpness: 0, isClosed: false, rotationFraction: 0, curveConsistency: 0 };
+    return { corners: 0, loops: 0, moraCount: 1, cornerSharpness: 0, isClosed: false, rotationFraction: 0, curveConsistency: 0, sizeRatio: 0, pathRatio: 0, cornerPoints: [] };
   // 角 v2 (2026-07-10): 検出は従来 (閾値 0.83rad・近接抑制) + **ピークホールド** (肩でなく
-  // 抑制窓内の折返し最大を鋭さに) + **継ぎ目救済** (閉ストロークの描き始め=頂点の欠損を
-  // cyclic 窓で回収・頂点上限150°=閉じ目ヘアピン除外) + 閉じ目 >150° は鋭さ平均から除外。
+  // 抑制窓内の折返し最大を鋭さに)。
   const k = Math.max(1, Math.min(Math.floor(points.length / 24), 8));
-  const n = points.length;
   const CORNER_THRESH = 0.83, VERTEX_CAP = 2.62;
-  const closingGap = Math.hypot(points[0].x - points[n-1].x, points[0].y - points[n-1].y);
+  const closingGap = Math.hypot(points[0].x - points[points.length - 1].x,
+                                points[0].y - points[points.length - 1].y);
   const isClosed = closingGap <= pathLen * 0.12;
+  // ─── 閉形の正準化 (2026-07-17 Step1): 閉じたストロークは「完成した形 (輪郭)」として測る ───
+  // ブーバ/キキは見えた完成形の印象 (Icefaceさん方針)。軌跡の痕跡 = 始点/終点/描く向きを消す:
+  // (a) スナップ = 終端の縮退点 (始点から1歩未満) を除去 — 閉じ足しの微小セグメントが単位
+  //     ターンへ逆符号スパイクを注入し、頂点をもつれと誤認させていた (三角レポート
+  //     mrnqm2sk-32: 頂点 si/so 0.877 なのに |sSigned|/so 0.567<0.7 で旧救済が不発)。
+  // (b) 巻きパッド = 先頭 4k 点を末尾へ複写。輪には端が無い — 配列端の除外域 (2k) に
+  //     落ちる角も、パッド側の複製が全文脈つきで通常スキャン (P1 ゲート込み) に乗る。
+  //     角は正準添字 (mod 実周) で重複除去。どこから描いても・どちら回りでも同じ形は
+  //     同じ測定になる。旧「継ぎ目救済」(cyclic 窓の特別扱い) は不要になり廃止
+  //     (v2 の救済コードは 7448c56 時点が最終形)。
+  //     ※回転正準化 (最直線位置へ回す) 案は不採用: 全周に十分長い直線が無い形 (小さめの
+  //       四角等) で回転先が角の隣になり、端除外と衝突して角を落とす (合成四角で実測)。
+  let mClosed = 0;   // 閉形の実周点数 (パッド前)。0 = 開いた線 (従来どおり)
+  if (isClosed && points.length >= 8) {
+    const step = pathLen / (points.length - 1);
+    let end = points.length;
+    while (end > 4 &&
+           Math.hypot(points[end - 1].x - points[0].x, points[end - 1].y - points[0].y) < step * 1.6) {
+      end--;
+    }
+    const arr = points.slice(0, end);
+    mClosed = arr.length;
+    points = arr.concat(arr.slice(0, Math.min(4 * k, arr.length)));
+  }
+  const n = points.length;
   const turnAt = (i, wrap) => {
     const im = wrap ? ((i - k) % n + n) % n : i - k;
     const ip = wrap ? (i + k) % n : i + k;
@@ -1161,65 +1185,50 @@ function strokeComplexity(points, w, h, maxMora = 16) {
       fired.push([peakIdx, peak]);
     }
   }
-  if (isClosed) {
-    let seamPeak = 0, seamIdx = -1;
-    for (let off = 0; off < 2 * k; off++) {
-      const i = (n - k + off) % n;
-      const t = turnAt(i, true);
-      if (t > seamPeak) { seamPeak = t; seamIdx = i; }
+  // (旧・継ぎ目救済はここにあった — Step1 の閉形正準化で頂点が通常スキャンに乗るため廃止)
+  // 閉形: 巻きパッド由来の重複角を正準添字 (mod 実周) で統合 (同じ頂点は 1 つに)
+  let firedC = fired;
+  if (mClosed > 0) {
+    const seen = [];
+    for (const [fi, peak] of fired) {
+      const c = fi % mClosed;
+      const dup = seen.find(e => {
+        const d = Math.abs(e.c - c);
+        return Math.min(d, mClosed - d) < k;
+      });
+      if (dup) { if (peak > dup.peak) { dup.c = c; dup.peak = peak; } }
+      else seen.push({ c, peak });
     }
-    if (seamPeak > CORNER_THRESH && seamPeak <= VERTEX_CAP && seamIdx >= 0) {
-      // P1: seam 候補にも集中度ゲート (wrap 版 share) — ペン下ろし/戻りのもつれ (pigtail) を
-      // 頂点と誤認しない。実頂点 (四角/三角の描き始め) = 転換が一点に集中して通過する。
-      const unitTurnW = (j) => {
-        const jm = ((j - 1) % n + n) % n, jp = (j + 1) % n;
-        const v1x = points[j].x - points[jm].x, v1y = points[j].y - points[jm].y;
-        const v2x = points[jp].x - points[j].x, v2y = points[jp].y - points[j].y;
-        const cross = v1x * v2y - v1y * v2x, dot = v1x * v2x + v1y * v2y;
-        if (Math.abs(cross) <= 1e-9 && Math.abs(dot) <= 1e-9) return 0;
-        return Math.atan2(cross, dot);   // 符号付き (もつれ判定に使う)
-      };
-      let cIdx = seamIdx;
-      for (let off = -k; off <= k; off++) {
-        const j = ((seamIdx + off) % n + n) % n;
-        if (Math.abs(unitTurnW(j)) > Math.abs(unitTurnW(cIdx))) cIdx = j;
-      }
-      let si = 0, so = 0, sSigned = 0;
-      for (let off = -2 * k; off <= 2 * k; off++) {
-        const t = unitTurnW(((cIdx + off) % n + n) % n);
-        so += Math.abs(t); sSigned += t;
-        if (Math.abs(off) <= 2) si += Math.abs(t);
-      }
-      // 実頂点 = 転換が一点に集中し **一方向** に、かつ **最大でも π** で通過する。
-      // ペン下ろし/戻りのもつれは (a) +/− 反転の連続 = 符号付き合計が相殺、または
-      // (b) 小ループの巻き込み = 蓄積転回が π を超える (実測 ~340°)、のどちらかになる。
-      const concentrated = so <= 1e-6
-        || (si / so >= 0.6 && Math.abs(sSigned) / so >= 0.7
-            && Math.abs(sSigned) <= VERTEX_CAP);
-      const firstCorner = fired.length ? fired[0][0] : -1000;
-      const distLast = seamIdx >= lastCorner ? seamIdx - lastCorner : (n - lastCorner) + seamIdx;
-      const distFirst = seamIdx <= firstCorner ? firstCorner - seamIdx : firstCorner + (n - seamIdx);
-      if (concentrated
-          && (lastCorner < 0 || distLast >= k) && (firstCorner < 0 || distFirst >= k))
-        fired.push([seamIdx, seamPeak]);
-    }
+    firedC = seen.map(e => [e.c, e.peak]);
   }
-  const corners = fired.length;
+  const corners = firedC.length;
   let csSum = 0, csCount = 0;
-  for (const [fi, peak] of fired) {
+  for (const [fi, peak] of firedC) {
     const nearEnds = fi < 3 * k || fi >= n - 3 * k;
-    if (isClosed && nearEnds && peak > VERTEX_CAP) continue;   // 閉じ目ヘアピンは鋭さに数えない
+    // 閉形はヘアピン (>150° = pigtail) を位置に依らず鋭さから除外 (旧: 継ぎ目近傍のみ)
+    if (isClosed && (mClosed > 0 ? peak > VERTEX_CAP : (nearEnds && peak > VERTEX_CAP))) continue;
     csSum += peak; csCount++;
   }
   const cornerSharpness = csCount > 0
     ? Math.max(0, Math.min(1, (csSum / csCount - CORNER_THRESH) / (Math.PI - CORNER_THRESH)))
     : 0;
   let totalTurning = 0;
-  for (let i = 1; i < points.length - 1; i++) {
-    const v1x = points[i].x - points[i-1].x, v1y = points[i].y - points[i-1].y;
-    const v2x = points[i+1].x - points[i].x, v2y = points[i+1].y - points[i].y;
-    const cross = v1x * v2y - v1y * v2x, dot = v1x * v2x + v1y * v2y;
-    if (Math.abs(cross) > 1e-9 || Math.abs(dot) > 1e-9) totalTurning += Math.atan2(cross, dot);
+  if (mClosed > 0) {
+    // 閉形: 輪として巡回で合計 — 継ぎ目位置に依らず一周 = 正確に ±2π (四角の欠け 0.76 周
+    // のような「継ぎ目の角の取りこぼし」が起きない)
+    for (let i = 0; i < mClosed; i++) {
+      const a = points[(i - 1 + mClosed) % mClosed], b = points[i], c = points[(i + 1) % mClosed];
+      const v1x = b.x - a.x, v1y = b.y - a.y, v2x = c.x - b.x, v2y = c.y - b.y;
+      const cross = v1x * v2y - v1y * v2x, dot = v1x * v2x + v1y * v2y;
+      if (Math.abs(cross) > 1e-9 || Math.abs(dot) > 1e-9) totalTurning += Math.atan2(cross, dot);
+    }
+  } else {
+    for (let i = 1; i < points.length - 1; i++) {
+      const v1x = points[i].x - points[i-1].x, v1y = points[i].y - points[i-1].y;
+      const v2x = points[i+1].x - points[i].x, v2y = points[i+1].y - points[i].y;
+      const cross = v1x * v2y - v1y * v2x, dot = v1x * v2x + v1y * v2y;
+      if (Math.abs(cross) > 1e-9 || Math.abs(dot) > 1e-9) totalTurning += Math.atan2(cross, dot);
+    }
   }
   // rotationFraction (2026-07-15, P11 記号語彙): loops (整数丸め) は「半円=0.5」を「直線=0」と
   // 区別できない。開いた弧 (⊃⊂∩∪ 系) の判別には丸める前の生の回転量が要る。
@@ -1276,8 +1285,10 @@ function strokeComplexity(points, w, h, maxMora = 16) {
   const rawMora = base + comp * sizeGate;
   const moraCount = Math.max(1, Math.min(maxMora, Math.round(rawMora)));
   // sizeRatio/pathRatio (2026-07-17): circleVocabSignal の紙面効率判定用 (native と同フィールド)
+  // cornerPoints (Step1): 判定に使った「形の角」の実座標 — ペンアップ後の確定○表示用
   return { corners, loops, moraCount, cornerSharpness, isClosed, rotationFraction, curveConsistency,
-           sizeRatio, pathRatio: pathLen / Math.max(canvasDiag, 1) };
+           sizeRatio, pathRatio: pathLen / Math.max(canvasDiag, 1),
+           cornerPoints: firedC.map(([fi]) => ({ x: points[fi].x, y: points[fi].y })) };
 }
 
 // ─── P11 記号語彙 (2026-07-15): ⊃⊂∩∪ (開いた弧) → 母音+ん / ＜＞∧∨ (開いた一角) → 子音+ん ───
@@ -2561,7 +2572,7 @@ function axesEqual(a, b) {
 // (Google Apps Script 等で公開ユーザーから収集したい場合用。空なら何もしない)。
 const FEEDBACK_ENDPOINT = "";
 const FB_VERSION = 4;          // v4: 口の2軸/描線頂点列/K・角・語形タグ/エンジン版を追加 (v3: reason)
-const ENGINE_VERSION = "v13";  // 生成/音声実現の版 (集計用)。v13 = native FormantSynth 移植 (1テイク継続・語1バッファ合成)。生成ロジックは v11 と同一
+const ENGINE_VERSION = "v14";  // 生成/音声実現の版 (集計用)。v14 = 閉形の正準化 (Step1: 頂点=形の角・始点/向き不変)。v13 = native FormantSynth 移植 (1テイク継続・語1バッファ合成)
 let feedbackLog = [];
 try { feedbackLog = JSON.parse(localStorage.getItem("onomatoi.feedback") || "[]"); } catch (e) {}
 let utteranceSeq = 0;
@@ -3053,9 +3064,19 @@ function redraw() {
     stroke.forEach((p, i) => i === 0 ? cctx.moveTo(p.x, p.y) : cctx.lineTo(p.x, p.y));
     cctx.stroke();
   }
+  // Step1 確定○ (2026-07-17): ペンアップ判定が使った「形の角」。閉形は正準化後なので
+  // 描き始めの頂点 (実況○が出ない継ぎ目) にも付く — 表示と判定の一致。
+  for (const p of confirmedCorners) {
+    cctx.beginPath();
+    cctx.strokeStyle = "rgba(232,72,138,0.95)";
+    cctx.lineWidth = 2.6;
+    cctx.arc(p.x, p.y, 10.5, 0, 2 * Math.PI);
+    cctx.stroke();
+  }
 }
 function coarseInkOn() { return true; }   // 2026-07-11: 粗い筆のみ (トグル廃止・データの均質化)
 let pendingPt = null;
+let confirmedCorners = [];   // Step1: ペンアップ判定の「形の角」座標 (確定○表示・クリアで消える)
 function pointerPos(ev) {
   const rect = canvas.getBoundingClientRect();
   return { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
@@ -3064,6 +3085,7 @@ canvas.addEventListener("pointerdown", ev => {
   ensureCtx();
   drawing = true;
   presetShapePts = null;
+  confirmedCorners = [];   // 新しい描線 → 前回の確定○を消す
   stroke = [pointerPos(ev)];
   canvas.setPointerCapture(ev.pointerId);
   ev.preventDefault();
@@ -3144,6 +3166,10 @@ canvas.addEventListener("pointerup", ev => {
         ? `完全な円 → ${CIRCLE_VOCAB}（円が完成して初めて 収束の ん が立つ）`
         : `completed circle → ${CIRCLE_VOCAB} (the closing N appears only when the circle completes)`;
     }
+    // Step1 確定○: 判定に使った「形の角」(閉形は正準化後 = 描き始めの頂点も含む) を表示。
+    // 実況の○ = 軌跡がその場で曲がった点 / 確定○ = 完成形としての角 — 表示と判定を一致させる。
+    confirmedCorners = cx.cornerPoints || [];
+    redraw();
     const seg = segmentStroke(inkPts);
     // v4 フィードバック用の発話コンテキスト: 判定に使った導出量 + 描いた珠の頂点列 (正規化・≤48点)。
     const r3 = v => Math.round(v * 1000) / 1000;
@@ -3339,6 +3365,7 @@ document.getElementById("btn-clear").addEventListener("click", () => {
   stopAll();
   stroke = [];
   presetShapePts = null;
+  confirmedCorners = [];
   redraw();
   setSliders({ size: 0, sharp: 0, tex: 0, bright: 0 });
   lastEvent = null;
