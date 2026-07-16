@@ -1081,8 +1081,102 @@ function applyHandCorrection(ax, level, dampenTexture = true) {
   };
 }
 
+// ─── なぞり直しの正準化 (2026-07-17 Step3): 同じ輪郭を N 周なぞったストロークを 1 周へ畳む ───
+// ブーバ/キキは完成形の印象 (Icefaceさん方針)。「2周した円」は「1つの円」と同一視して aaan/
+// ブーバに読む (Step1/Step2 の輪郭測定へ渡す前に 1 周に折り畳む)。
+// 判定: 重心まわりの巻きが**単調に N·2π** で、かつ**各周が絶対座標で重なる** (= 同じ場所を
+// なぞった) ときのみ畳む。除外 (畳まない=軌跡層の担当のまま):
+//   ・渦 = 半径が縮む → 周が重ならない (dev 大)
+//   ・連ループびーびー = 各ループが別位置・重心が周の外 → 巻きが N·2π にならない (N<2 or 逆行大)
+//   ・波/ジグザグ = 巻きが相殺 (逆行大)
+function collapseRetrace(points) {
+  const n = points.length;
+  if (n < 16) return points;
+  let cx = 0, cy = 0;
+  for (const p of points) { cx += p.x; cy += p.y; }
+  cx /= n; cy /= n;
+  let theta = 0;
+  let prev = Math.atan2(points[0].y - cy, points[0].x - cx);
+  const wind = [0];
+  for (let i = 1; i < n; i++) {
+    let a = Math.atan2(points[i].y - cy, points[i].x - cx);
+    let d = a - prev;
+    while (d > Math.PI) d -= 2 * Math.PI;
+    while (d < -Math.PI) d += 2 * Math.PI;
+    theta += d; wind.push(theta); prev = a;
+  }
+  const total = Math.abs(theta);
+  const N = Math.round(total / (2 * Math.PI));
+  if (N < 2) return points;                                  // 一周以下 → 従来どおり
+  if (total < (N - 0.25) * 2 * Math.PI) return points;       // 端数周は畳まない (最終周が不完全)
+  const sign = theta >= 0 ? 1 : -1;
+  let back = 0;
+  for (let i = 1; i < n; i++) {
+    const d = wind[i] - wind[i - 1];
+    if (d * sign < 0) back += -d * sign;
+  }
+  if (back > 0.25 * total) return points;                    // 逆行が多い → なぞりでない (連ループ/波)
+  let minX = points[0].x, maxX = minX, minY = points[0].y, maxY = minY;
+  for (const p of points) {
+    minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+    minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+  }
+  const bboxDiag = Math.hypot(maxX - minX, maxY - minY);
+  if (bboxDiag < 1e-6) return points;
+  // 巻き角レベル L_k = k·2π (最終周は実端に clamp して範囲内を保証)
+  const levels = [];
+  for (let k = 0; k <= N; k++) levels.push(sign * k * 2 * Math.PI);
+  levels[N] = wind[n - 1];
+  const posAtWind = (tw) => {
+    for (let i = 1; i < n; i++) {
+      const lo = wind[i - 1], hi = wind[i];
+      if (lo !== hi && (tw - lo) * (tw - hi) <= 0) {
+        const t = (tw - lo) / (hi - lo);
+        return { x: points[i - 1].x + (points[i].x - points[i - 1].x) * t,
+                 y: points[i - 1].y + (points[i].y - points[i - 1].y) * t };
+      }
+    }
+    return null;
+  };
+  const M = 48;
+  const laps = [];
+  for (let k = 0; k < N; k++) {
+    const lap = [];
+    for (let j = 0; j < M; j++) {
+      const p = posAtWind(levels[k] + (levels[k + 1] - levels[k]) * j / M);
+      if (!p) return points;                                 // 分割できない → 安全側で畳まない
+      lap.push(p);
+    }
+    laps.push(lap);
+  }
+  // 各周の平均半径が一致するか (渦 = 半径が縮む を確実に弾く。なぞり = 各周ほぼ同半径)
+  const lapMeanR = laps.map(lap => {
+    let s = 0;
+    for (const q of lap) s += Math.hypot(q.x - cx, q.y - cy);
+    return s / lap.length;
+  });
+  for (let k = 1; k < N; k++)
+    if (Math.abs(lapMeanR[k] - lapMeanR[0]) > 0.12 * lapMeanR[0]) return points;
+  let dev = 0;
+  for (let j = 0; j < M; j++)
+    for (let k = 1; k < N; k++)
+      dev = Math.max(dev, Math.hypot(laps[k][j].x - laps[0][j].x, laps[k][j].y - laps[0][j].y));
+  if (dev > 0.18 * bboxDiag) return points;                  // 周が重ならない → 別位置 → 畳まない
+  const collapsed = [];
+  for (let j = 0; j < M; j++) {
+    const xs = laps.map(l => l[j].x).sort((a, b) => a - b);
+    const ys = laps.map(l => l[j].y).sort((a, b) => a - b);
+    const mid = N >> 1;
+    const med = (arr) => (N % 2 ? arr[mid] : (arr[mid - 1] + arr[mid]) / 2);
+    collapsed.push({ x: med(xs), y: med(ys) });
+  }
+  collapsed.push({ x: collapsed[0].x, y: collapsed[0].y });  // 閉じる
+  return collapsed;
+}
+
 // ─── strokeComplexity (AxisExtractor.swift v3 の移植: 角+ループ+大きさ → モーラ数) ───
 function strokeComplexity(points, w, h, maxMora = 16) {
+  points = collapseRetrace(points);   // Step3: N 周なぞり → 1 周へ畳んでから測る
   if (points.length < 2 || w <= 0 || h <= 0)
     return { corners: 0, loops: 0, moraCount: 1, cornerSharpness: 0, isClosed: false, rotationFraction: 0, curveConsistency: 0, sizeRatio: 0, pathRatio: 0, cornerPoints: [], formK: null };
   let minX = points[0].x, maxX = points[0].x, minY = points[0].y, maxY = points[0].y;
@@ -2592,7 +2686,7 @@ function axesEqual(a, b) {
 // (Google Apps Script 等で公開ユーザーから収集したい場合用。空なら何もしない)。
 const FEEDBACK_ENDPOINT = "";
 const FB_VERSION = 4;          // v4: 口の2軸/描線頂点列/K・角・語形タグ/エンジン版を追加 (v3: reason)
-const ENGINE_VERSION = "v15";  // 生成/音声実現の版 (集計用)。v15 = 転回集中度→形のK (Step2/P3形式化)。v14 = 閉形の正準化 (Step1)。v13 = native FormantSynth 移植
+const ENGINE_VERSION = "v16";  // 生成/音声実現の版 (集計用)。v16 = なぞり直しの正準化 (Step3: N周→1周に同一視)。v15 = 転回集中度→形のK (Step2)。v14 = 閉形の正準化 (Step1)。v13 = native FormantSynth 移植
 let feedbackLog = [];
 try { feedbackLog = JSON.parse(localStorage.getItem("onomatoi.feedback") || "[]"); } catch (e) {}
 let utteranceSeq = 0;

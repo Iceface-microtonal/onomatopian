@@ -229,5 +229,63 @@ console.log("── Step2: 転回集中度 → 形の K (formK・P3 の形式化
   check("開いた線は formK null", cxOf(line).formK === null);
 }
 
+console.log("── Step3: なぞり直しの正準化 (N 周 → 1 周に畳んで同一視) ──");
+{
+  const circ = (turns) => {
+    const p = [];
+    const n = Math.round(60 * turns);
+    for (let i = 0; i <= n; i++) {
+      const t = i / n * turns * 2 * Math.PI;
+      p.push({ x: 180 + 120 * Math.cos(t), y: 180 + 120 * Math.sin(t) });
+    }
+    return p;
+  };
+  const tri = (turns) => {
+    const V = [[0, -1], [0.866, 0.5], [-0.866, 0.5]];
+    const p = [];
+    const per = 90, n = per * turns;
+    for (let i = 0; i <= n; i++) {
+      const u = (i / per) % 1, s = Math.floor(u * 3) % 3, f = u * 3 - Math.floor(u * 3);
+      const a = V[s], b = V[(s + 1) % 3];
+      p.push({ x: 180 + 120 * (a[0] + (b[0] - a[0]) * f), y: 180 + 120 * (a[1] + (b[1] - a[1]) * f) });
+    }
+    return p;
+  };
+  // 2周・3周の円 → 単一円と同じ測定 (formK ≈ −0.85・角0)
+  const c1 = cxOf(circ(1)), c2 = cxOf(circ(2)), c3 = cxOf(circ(3));
+  check("円2周 → formK ≈ 単一円 (±0.1)", c2.formK !== null && Math.abs(c2.formK - c1.formK) < 0.1,
+        `1周=${c1.formK?.toFixed(2)} 2周=${c2.formK?.toFixed(2)}`);
+  check("円2周 → 角0 (なぞりが偽の角を作らない)", c2.corners === 0, `cor=${c2.corners}`);
+  check("円3周 → formK ≈ 単一円", c3.formK !== null && Math.abs(c3.formK - c1.formK) < 0.1,
+        `3周=${c3.formK?.toFixed(2)}`);
+  check("円2周 jitter → 角0・formK 安定", (() => {
+    const j = cxOf(jittered(circ(2)));
+    return j.corners === 0 && j.formK !== null && Math.abs(j.formK - c1.formK) < 0.15;
+  })());
+  // 三角2周 → 三角と同じ (角3・破裂圏)
+  const t1 = cxOf(tri(1)), t2 = cxOf(tri(2));
+  check("三角2周 → 角3 (単一三角と同じ)", t2.corners === 3, `cor=${t2.corners}`);
+  check("三角2周 → formK ≈ 三角 (±0.1)", t2.formK !== null && Math.abs(t2.formK - t1.formK) < 0.1,
+        `1周=${t1.formK?.toFixed(2)} 2周=${t2.formK?.toFixed(2)}`);
+  // 渦 (半径が縮む) は畳まない → 軌跡層 (formK null)
+  const spiral = [];
+  for (let i = 0; i <= 154; i++) {
+    const t = i / 154 * 2.2 * 2 * Math.PI;
+    const r = 130 * (1 - 0.75 * (i / 154));
+    spiral.push({ x: 180 + r * Math.cos(t), y: 180 + r * Math.sin(t) });
+  }
+  check("渦 (半径縮む) → 畳まない・formK null", cxOf(spiral).formK === null);
+  // 連ループびーびー (別位置のループ) は畳まない → 軌跡層 (複数モーラを保つ)
+  const chain = [];
+  for (const [c0x] of [[120], [999]]) void c0x;
+  const lap = (ox) => { const p = []; for (let i = 0; i <= 50; i++) { const t = i / 50 * 2 * Math.PI; p.push({ x: ox + 45 * Math.cos(t), y: 180 + 45 * Math.sin(t) }); } return p; };
+  for (const q of lap(120)) chain.push(q);
+  for (let t = 0; t < 8; t++) chain.push({ x: 120 + 120 * t / 8, y: 180 });
+  for (const q of lap(240)) chain.push(q);
+  const ch = cxOf(chain);
+  check("連ループびーびー → 畳まない (formK null・複数モーラ保持)",
+        ch.formK === null && ch.moraCount >= 3, `formK=${ch.formK} mc=${ch.moraCount}`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

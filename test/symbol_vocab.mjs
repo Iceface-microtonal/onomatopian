@@ -138,12 +138,12 @@ console.log("── circle (aaan) ゲート: 一周の閉円のみ ──");
   check("円1.08周 (ペン尾重なり) → true", jo.circle,
         JSON.stringify({ rot: +jo.cx.rotationFraction.toFixed(2), closed: jo.cx.isClosed,
                          eff: +(jo.cx.pathRatio / jo.cx.sizeRatio).toFixed(2) }));
-  // 同じ円を2周なぞる = 円の「完成」を越えた別の描写 → aaan にしない
+  // 同じ円を2周なぞる = Step3 で 1 周に畳んで「1つの円」と同一視 → aaan true (2026-07-17 更新)。
+  // (Step1 時代は「弾く=false」だったが、Step3 で「同一視」まで進めた: なぞりは完成形が同じ)
   const traced2 = arc(180, 180, 120, 2.0);
   const j2 = judge(traced2);
-  check("同一円2周なぞり → false", !j2.circle,
-        JSON.stringify({ rot: +j2.cx.rotationFraction.toFixed(2),
-                         eff: +(j2.cx.pathRatio / j2.cx.sizeRatio).toFixed(2) }));
+  check("同一円2周なぞり → aaan true (Step3 で畳む)", j2.circle,
+        JSON.stringify({ rot: +j2.cx.rotationFraction.toFixed(2), cor: j2.cx.corners }));
 }
 {
   // 渦 (同心 2.2周): 複雑な一筆 — aaan にしない (mrnps275-7 のクラス)
