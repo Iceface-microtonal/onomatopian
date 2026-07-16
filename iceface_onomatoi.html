@@ -1566,7 +1566,7 @@ const DIPH_PAIRS = ["ai", "au", "ei", "oi", "ou"];
 // 専用の拡張録音 (diph_aaii 等) を先行オーバーラップで読む。(a,u) ペアは native 側にも
 // 拡張録音が無いため、この機構は使わず**素の母音として発声**する (native の現状の
 // 挙動と同じ・虚偽の継続をしない方が正直)。
-const CV_DIPH_EXT_PAIRS = ["ai", "ei", "oi", "ou"];   // au は native にも拡張録音が無い
+const CV_DIPH_EXT_PAIRS = ["ai", "au", "ei", "oi", "ou"];   // au は 2026-07-16 に復旧 (誤削除されていた diph_aauu を他 family から回収)
 
 function sampleKeys() {
   const keys = [];
