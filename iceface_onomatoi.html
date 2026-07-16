@@ -35,6 +35,9 @@
   .result-word { font-size: 30px; font-weight: 700; min-height: 38px; word-break: break-all; }
   .result-meta { margin-left: auto; text-align: right; font-size: 11px; color: var(--gray); white-space: nowrap; }
   .axis-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+  /* 2026-07-17: 開発用コントロール (軸スライダー/hand corr) は既定非表示 — ?dev=1 で表示。
+     !important: .knob-row (後方定義・display:flex) との同特異度競合に勝つため。 */
+  .dev-only { display: none !important; }
   .axis-row label { width: 64px; font-size: 10px; color: var(--gray); }
   .axis-row input[type=range] { flex: 1; accent-color: var(--pink); }
   .axis-row .val { width: 48px; text-align: right; font-size: 10px; color: var(--gray); }
@@ -136,12 +139,16 @@
     <span id="status"></span>
     <button id="btn-play" class="primary" style="margin-left:8px;">▶ PLAY</button>
   </div>
-  <div class="axis-row"><label>size</label><input type="range" id="ax-size" min="-1" max="1" step="0.01" value="0"><span class="val" id="val-size">+0.00</span></div>
-  <div class="axis-row"><label>sharp</label><input type="range" id="ax-sharp" min="-1" max="1" step="0.01" value="0"><span class="val" id="val-sharp">+0.00</span></div>
-  <div class="axis-row"><label>texture</label><input type="range" id="ax-tex" min="-1" max="1" step="0.01" value="0"><span class="val" id="val-tex">+0.00</span></div>
-  <div class="axis-row"><label>bright</label><input type="range" id="ax-bright" min="-1" max="1" step="0.01" value="0"><span class="val" id="val-bright">+0.00</span></div>
-  <div class="axis-row"><label>round</label><input type="range" id="ax-round" min="-1" max="1" step="0.01" value="0"><span class="val" id="val-round">+0.00</span></div>
-  <div class="axis-row"><label>open</label><input type="range" id="ax-open" min="-1" max="1" step="0.01" value="0"><span class="val" id="val-open">+0.00</span></div>
+  <!-- 2026-07-17: 軸スライダーは非表示 (dev-only)。コウさんの feedback ラウンドで
+       「描く前に軸をいじれる」余地を無くし、描画→語の対応だけを検証対象にする。
+       要素と JS 配線は温存 (setSliders の読み出し表示・readSliders の既定 0)。
+       開発時は URL に ?dev=1 で再表示。 -->
+  <div class="axis-row dev-only"><label>size</label><input type="range" id="ax-size" min="-1" max="1" step="0.01" value="0"><span class="val" id="val-size">+0.00</span></div>
+  <div class="axis-row dev-only"><label>sharp</label><input type="range" id="ax-sharp" min="-1" max="1" step="0.01" value="0"><span class="val" id="val-sharp">+0.00</span></div>
+  <div class="axis-row dev-only"><label>texture</label><input type="range" id="ax-tex" min="-1" max="1" step="0.01" value="0"><span class="val" id="val-tex">+0.00</span></div>
+  <div class="axis-row dev-only"><label>bright</label><input type="range" id="ax-bright" min="-1" max="1" step="0.01" value="0"><span class="val" id="val-bright">+0.00</span></div>
+  <div class="axis-row dev-only"><label>round</label><input type="range" id="ax-round" min="-1" max="1" step="0.01" value="0"><span class="val" id="val-round">+0.00</span></div>
+  <div class="axis-row dev-only"><label>open</label><input type="range" id="ax-open" min="-1" max="1" step="0.01" value="0"><span class="val" id="val-open">+0.00</span></div>
   <div class="axis-row" title="round/open をそのまま口の形に — 描いた形を「発音するときの口」として読んでいる。→ の右は発話中のモーラごとの口の推移 (P3)">
     <label>口</label>
     <canvas id="mouth-icon" width="46" height="32" style="flex:none;"></canvas>
@@ -150,7 +157,8 @@
     <div id="mouth-timeline" style="display:flex; align-items:flex-end; gap:3px; flex-wrap:wrap;"></div>
   </div>
   <div class="chips" id="preset-chips"></div>
-  <div class="knob-row" style="margin-top:10px;">
+  <!-- hand corr も非表示 (既定 0.00 のまま)。生ペン時代の遺物で、コウさん実聴 (07-15) で 0 が確定。 -->
+  <div class="knob-row dev-only" style="margin-top:10px;">
     <span class="knob">hand corr <input type="range" id="kn-hc" min="0" max="1.5" step="0.05" value="0"><span id="val-hc">0.00</span></span>
   </div>
 </div>
@@ -3167,6 +3175,13 @@ document.getElementById("btn-play").addEventListener("click", () => {
   });
 });
 drawMouthIcon(0, 0);   // 初期表示 (中立の口)
+// 2026-07-17: 軸スライダー/hand corr は既定非表示 (コウさんの feedback ラウンドで
+// 「描く前に軸をいじれる」余地を無くす)。開発時は ?dev=1 で再表示。
+try {
+  if (new URLSearchParams(location.search).get("dev") === "1") {
+    document.querySelectorAll(".dev-only").forEach(el => el.classList.remove("dev-only"));
+  }
+} catch (e) {}
 document.getElementById("kn-hc").addEventListener("input", e => {
   document.getElementById("val-hc").textContent = Number(e.target.value).toFixed(2);
 });
