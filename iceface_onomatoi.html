@@ -1544,9 +1544,9 @@ function sampleKeys() {
   for (const v of CONTN_VOWELS) keys.push("v_" + v + "_nn");
   for (const p of DIPH_PAIRS) keys.push("diph_" + p);
   for (const p of CV_DIPH_EXT_PAIRS) keys.push("diph_" + p[0] + p[0] + p[1] + p[1]);
-  // P12 開いた弧の語彙で使う my行 (録音待ち)。sampleUrlCandidates が cv_m<v> へ
-  // フォールバックするので、録音が無い間は み/も の音で鳴る。
-  keys.push("cv_myi", "cv_myo");
+  // P12 開いた弧の語彙で使う my行 (2026-07-16 コウさん録音 myo/myu/mya を収録)。
+  // myi はまだ未録音 → sampleUrlCandidates が cv_mi へフォールバック (み で代用)。
+  keys.push("cv_myi", "cv_myo", "cv_myu", "cv_mya");
   return keys;
 }
 // key に対応する実ファイル名の候補列 (先頭から順に fetch を試す)。通常は [key] のみ。
