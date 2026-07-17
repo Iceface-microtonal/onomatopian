@@ -1176,9 +1176,11 @@ function collapseRetrace(points) {
 
 // ─── strokeComplexity (AxisExtractor.swift v3 の移植: 角+ループ+大きさ → モーラ数) ───
 function strokeComplexity(points, w, h, maxMora = 16) {
+  const rawInput = points;
   points = collapseRetrace(points);   // Step3: N 周なぞり → 1 周へ畳んでから測る
+  const retraced = points !== rawInput;   // 参照が変わった = 畳んだ (UI 表示用)
   if (points.length < 2 || w <= 0 || h <= 0)
-    return { corners: 0, loops: 0, moraCount: 1, cornerSharpness: 0, isClosed: false, rotationFraction: 0, curveConsistency: 0, sizeRatio: 0, pathRatio: 0, cornerPoints: [], formK: null };
+    return { corners: 0, loops: 0, moraCount: 1, cornerSharpness: 0, isClosed: false, rotationFraction: 0, curveConsistency: 0, sizeRatio: 0, pathRatio: 0, cornerPoints: [], formK: null, turnConcentration: null, retraced: false };
   let minX = points[0].x, maxX = points[0].x, minY = points[0].y, maxY = points[0].y;
   for (const p of points) {
     minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
@@ -1191,7 +1193,7 @@ function strokeComplexity(points, w, h, maxMora = 16) {
     pathLen += Math.hypot(points[i].x - points[i-1].x, points[i].y - points[i-1].y);
   const sizeRatio = bboxDiag / Math.max(canvasDiag, 1);
   if (sizeRatio < 0.05 && pathLen < canvasDiag * 0.08)
-    return { corners: 0, loops: 0, moraCount: 1, cornerSharpness: 0, isClosed: false, rotationFraction: 0, curveConsistency: 0, sizeRatio: 0, pathRatio: 0, cornerPoints: [], formK: null };
+    return { corners: 0, loops: 0, moraCount: 1, cornerSharpness: 0, isClosed: false, rotationFraction: 0, curveConsistency: 0, sizeRatio: 0, pathRatio: 0, cornerPoints: [], formK: null, turnConcentration: null, retraced: false };
   // 角 v2 (2026-07-10): 検出は従来 (閾値 0.83rad・近接抑制) + **ピークホールド** (肩でなく
   // 抑制窓内の折返し最大を鋭さに)。
   const k = Math.max(1, Math.min(Math.floor(points.length / 24), 8));
@@ -1339,11 +1341,11 @@ function strokeComplexity(points, w, h, maxMora = 16) {
   // formK = −0.85 + 0.8·tc + 1.9·cs (clamp ±1)。アンカー: 円 −0.85 / 手描き四角 ≈+0.37 /
   // 手描き三角 ≈+0.45 / 星 → +1。スケール・始点・向きに不変 (Step1 の正準化の上に立つ)。
   // 開いた線 (formK=null) は従来どおり軌跡の K (drawK) — 線の描き方はそれ自体が知覚。
-  let formK = null;
+  let formK = null, turnConcentration = null;
   if (mClosed > 0) {
     const T = Math.max(Math.abs(totalTurning), 2 * Math.PI);
-    const tc = Math.min(1, csSum / T);
-    formK = Math.max(-1, Math.min(1, -0.85 + 0.8 * tc + 1.9 * cornerSharpness));
+    turnConcentration = Math.min(1, csSum / T);
+    formK = Math.max(-1, Math.min(1, -0.85 + 0.8 * turnConcentration + 1.9 * cornerSharpness));
   }
   // curveConsistency: 符号付き合計 (相殺後) / 絶対値合計 (相殺前)。1.0 = 常に同じ向きに
   // 曲がる (弧)・低い値 = 行ったり来たり (波・ジグザグ)。
@@ -1399,10 +1401,12 @@ function strokeComplexity(points, w, h, maxMora = 16) {
   // sizeRatio/pathRatio (2026-07-17): circleVocabSignal の紙面効率判定用 (native と同フィールド)
   // cornerPoints (Step1): 判定に使った「形の角」の実座標 — ペンアップ後の確定○表示用
   // formK (Step2): 完成形から読んだ K (閉形のみ・null=開いた線=従来の軌跡 K)
+  // turnConcentration (Step2): 総転回のうち角に集中した割合 — 三角/四角≈1・円=0 (UI 表示用)
+  // retraced (Step3): なぞり直しを 1 周へ畳んだか (UI 表示用)
   return { corners, loops, moraCount, cornerSharpness, isClosed, rotationFraction, curveConsistency,
            sizeRatio, pathRatio: pathLen / Math.max(canvasDiag, 1),
            cornerPoints: firedC.map(([fi]) => ({ x: points[fi].x, y: points[fi].y })),
-           formK };
+           formK, turnConcentration, retraced };
 }
 
 // ─── P11 記号語彙 (2026-07-15): ⊃⊂∩∪ (開いた弧) → 母音+ん / ＜＞∧∨ (開いた一角) → 子音+ん ───
@@ -2805,15 +2809,46 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 // ─── なぜ? (Onomatopoeia.explain の移植・日英) — 測って見せる説明 ───
-function explainEvent(ax, moras, vocabReason = null) {
+// ─── Step1/2/3 の「計測」を人に見える言葉にする (2026-07-17) ───
+// 確定○は角の**位置**しか見せない。ここは「形をどう読んで、その形からどう音色を決めたか」
+// の数値を出す (Icefaceさん依頼: Step1,2 の計測を結果から見えるように)。
+function shapeMeasureLines(cx, ja) {
+  const out = [];
+  const n2 = v => (v >= 0 ? "+" : "") + v.toFixed(2);
+  if (cx.retraced) {   // Step3
+    out.push(ja ? "なぞり直し → 1周の形として読んだ (何周でも同じ形)"
+                : "retraced → read as a single lap (same shape however many laps)");
+  }
+  if (cx.formK !== null) {   // Step1 (形の認識) + Step2 (形→音色)
+    const knot = cx.corners > 0 ? (ja ? " (結び目も含む)" : " (incl. the knot)") : "";
+    out.push(ja ? `形: 閉じた輪郭・角 ${cx.corners}個${knot}`
+                : `form: closed contour, ${cx.corners} corner(s)${knot}`);
+    const tc = cx.turnConcentration ?? 0;
+    const zone = cx.formK > 0.3 ? (ja ? "破裂圏 (か・た・ぱ系)" : "plosive zone (k/t/p)")
+               : cx.formK < -0.3 ? (ja ? "ブーバ圏 (ま・わ・な系)" : "bouba zone (m/w/n)")
+               : (ja ? "中間" : "middle");
+    out.push(ja ? `転回の集中度 ${tc.toFixed(2)} (角に集中=1 / 全周に分散=0)・角の鋭さ ${cx.cornerSharpness.toFixed(2)} → 形のK ${n2(cx.formK)} = ${zone}`
+                : `turn concentration ${tc.toFixed(2)} (at corners=1 / spread=0), corner sharpness ${cx.cornerSharpness.toFixed(2)} → form K ${n2(cx.formK)} = ${zone}`);
+  } else {
+    const why = cx.isClosed ? (ja ? "閉じているが単純な輪郭でない (渦/連ループ)" : "closed but not a simple contour (spiral/chain)")
+                            : (ja ? "開いた線" : "open line");
+    out.push(ja ? `形: ${why} → 音色は軌跡から読む`
+                : `form: ${why} → tone is read from the trajectory`);
+  }
+  return out;
+}
+
+function explainEvent(ax, moras, vocabReason = null, shape = null) {
   const voiced = moras.filter(m => !m.isSilentRest);
   if (!voiced.length) return [];
   const ja = uiLang === "ja";
+  // Step1/2/3 の計測 (形をどう読んだか) は常に先頭に出す — 固定語彙 (P12) でも形が根拠。
+  const measured = shape ? shapeMeasureLines(shape, ja) : [];
   // P12 記号語彙: 固定語彙の語は軸からの生成でないので、立法の理由だけを示す。
-  if (vocabReason) return [vocabReason];
+  if (vocabReason) return [...measured, vocabReason];
   const f = v => (v >= 0 ? "+" : "") + v.toFixed(2);
   const onsets = voiced.map(m => m.onset).filter(c => c);
-  const lines = [];
+  const lines = [...measured];
   // 子音の性格 ← sharpness
   if (ax.sharp > 0.25) lines.push(ja ? `鋭さ ${f(ax.sharp)}（尖り）→ 鋭い子音（か・た・さ・つ系）`
                                      : `sharp ${f(ax.sharp)} (spiky) → hard consonants (k/t/s/ts)`);
@@ -2871,10 +2906,10 @@ function whyFormReason(ax, moras, ja) {
   }
   return ja ? "素の語根" : "plain root";
 }
-function updateWhy(ax, moras, vocabReason = null) {
+function updateWhy(ax, moras, vocabReason = null, shape = null) {
   const panel = document.getElementById("why-panel");
   if (!panel) return;
-  const lines = explainEvent(ax, moras, vocabReason);
+  const lines = explainEvent(ax, moras, vocabReason, shape);
   if (!lines.length) { panel.style.display = "none"; return; }
   document.getElementById("why-title").textContent = uiLang === "ja" ? "なぜ?" : "why?";
   const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
@@ -2917,7 +2952,7 @@ function playAndRemember(event, axesUsed, log, src = "tune", extra = {}) {
   if (tagBox) tagBox.style.display = "none";
   showResult(event);
   // なぜ? (native の explain と同じ「測って見せる」説明)。P12 語彙語は立法の理由を示す。
-  updateWhy(axesUsed, event.moras, event.vocabReason ?? null);
+  updateWhy(axesUsed, event.moras, event.vocabReason ?? null, extra.shape ?? null);
   playEvent(event);
   if (log) appendLog(event);
 }
@@ -3291,8 +3326,10 @@ canvas.addEventListener("pointerup", ev => {
     const r3 = v => Math.round(v * 1000) / 1000;
     const beads = (coarse ? stroke : inkPts).slice(0, 48)
       .map(p => [r3(p.x / rect.width), r3(p.y / rect.height)]);
+    // shape: なぜ?パネルの計測表示用 (Step1/2/3)。playAndRemember は fb レコードへ
+    // 明示フィールドしか写さないので、ここに載せても投票データには入らない。
     const extra = { k: kDraw, corners: cx.corners, cs: cx.cornerSharpness,
-                    loops: cx.loops, stroke: beads };
+                    loops: cx.loops, stroke: beads, shape: cx };
     if (vocabWord) {
       const ev2 = vocabEvent(vocabWord, ax);
       ev2.vocabReason = vocabReason;
