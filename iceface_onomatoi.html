@@ -1261,22 +1261,30 @@ function strokeComplexity(points, w, h, maxMora = 16) {
     return Math.acos(Math.max(-1, Math.min(1, (v1x*v2x + v1y*v2y) / (l1*l2))));
   };
   const fired = [];
+  // kS = 角候補ゲートの測定窓の下限 (2026-07-17 アーキタイプ監査): 短いストローク (k=1〜2)
+  // ではスプライン丸めの半径内で測ってしまい、(a) 実頂点を「弧」と誤棄却 (✓ の頂点:
+  // spread 1.38>1.25 → 角0 → 弧語彙 muu に誤爆) (b) 近接抑制が 1 点となり同一頂点が
+  // 二重発火する。候補ゲート一式 (抑制/ピークホールド/端除外/spread/局在化/集中度) を
+  // kS=max(3,k) に統一 — 通常の描線 (n≥72 → k≥3) では kS=k で従来と厳密に同一
+  // = kou fixture 非干渉。
+  const kS = Math.max(3, k);
   let lastCorner = -1000;
   for (let i = k; i < n - k; i++) {
-    if (turnArr[i] > CORNER_THRESH && i - lastCorner >= k) {
+    if (turnArr[i] > CORNER_THRESH && i - lastCorner >= kS) {
       lastCorner = i;
       let peak = turnArr[i], peakIdx = i;
-      for (let j = i + 1; j < Math.min(i + k, n - k); j++)
+      for (let j = i + 1; j < Math.min(i + kS, n - k); j++)
         if (turnArr[j] > peak) { peak = turnArr[j]; peakIdx = j; }
-      // 端 2k 以内は倍窓が測れない (開いた線の端点は知覚的にも「線の中の角」でない) → 不採用
-      if (peakIdx < 2 * k || peakIdx > n - 1 - 2 * k) continue;
-      const spread = peak > 1e-6 ? turnAtScale(peakIdx, 2 * k) / peak : 9;
+      // 端 2kS 以内は倍窓が測れない (開いた線の端点は知覚的にも「線の中の角」でない) → 不採用
+      if (peakIdx < 2 * kS || peakIdx > n - 1 - 2 * kS) continue;
+      const den = kS === k ? peak : turnAtScale(peakIdx, kS);
+      const spread = den > 1e-6 ? turnAtScale(peakIdx, 2 * kS) / den : 9;
       if (spread > 1.25) continue;                       // 弧に分散 = 滑らかな反転
       let cIdx = peakIdx;                                // 単位曲率で角の実位置へ局在化
-      for (let j = Math.max(1, peakIdx - k); j <= Math.min(n - 2, peakIdx + k); j++)
+      for (let j = Math.max(1, peakIdx - kS); j <= Math.min(n - 2, peakIdx + kS); j++)
         if (unitTurn[j] > unitTurn[cIdx]) cIdx = j;
       let si = 0, so = 0;
-      for (let j = Math.max(1, cIdx - 2 * k); j <= Math.min(n - 2, cIdx + 2 * k); j++) {
+      for (let j = Math.max(1, cIdx - 2 * kS); j <= Math.min(n - 2, cIdx + 2 * kS); j++) {
         so += unitTurn[j];
         if (Math.abs(j - cIdx) <= 2) si += unitTurn[j];
       }
@@ -1332,21 +1340,6 @@ function strokeComplexity(points, w, h, maxMora = 16) {
   // rotationFraction (2026-07-15, P11 記号語彙): loops (整数丸め) は「半円=0.5」を「直線=0」と
   // 区別できない。開いた弧 (⊃⊂∩∪ 系) の判別には丸める前の生の回転量が要る。
   const rotationFraction = Math.abs(totalTurning) / (2 * Math.PI);
-  // ─── Step2 (2026-07-17): 転回の集中度 → 形の K (P3「真の角→破裂/流れ→清音摩擦」の形式化) ───
-  // ブーバ/キキ=完成形の印象 (Icefaceさん方針)。閉じた輪郭の総転回 (凸形は必ず 2π) が
-  // 「どこに集中して通過するか」で音色を読む:
-  //   tc = Σ(真の角の転回ピーク) / 総転回 — 三角/四角 ≈1 (全転回が頂点に集中)・円 =0 (全周に
-  //        分散)・多重ループ/渦は分母が 2π を超えて薄まる (=柔らかい)。
-  //   cs = 角の鋭さ (三角 120°転回 > 四角 90°) が キキの強度を分ける。
-  // formK = −0.85 + 0.8·tc + 1.9·cs (clamp ±1)。アンカー: 円 −0.85 / 手描き四角 ≈+0.37 /
-  // 手描き三角 ≈+0.45 / 星 → +1。スケール・始点・向きに不変 (Step1 の正準化の上に立つ)。
-  // 開いた線 (formK=null) は従来どおり軌跡の K (drawK) — 線の描き方はそれ自体が知覚。
-  let formK = null, turnConcentration = null;
-  if (mClosed > 0) {
-    const T = Math.max(Math.abs(totalTurning), 2 * Math.PI);
-    turnConcentration = Math.min(1, csSum / T);
-    formK = Math.max(-1, Math.min(1, -0.85 + 0.8 * turnConcentration + 1.9 * cornerSharpness));
-  }
   // curveConsistency: 符号付き合計 (相殺後) / 絶対値合計 (相殺前)。1.0 = 常に同じ向きに
   // 曲がる (弧)・低い値 = 行ったり来たり (波・ジグザグ)。
   // v2 (2026-07-16, Icefaceさん報告「⊂ が出にくい」の実測): 点単位の測定は手ブレに脆く、
@@ -1389,8 +1382,83 @@ function strokeComplexity(points, w, h, maxMora = 16) {
     }
     return abs > 1e-9 ? Math.abs(net) / abs : 0;
   })();
+  // ─── 粗スケールの反転数 (2026-07-17 #3): 「描いた労力=語の長さ」の救済チャネル ───
+  // ヘアピン/往復 (ハッチング・塗りつぶし・U字の折返し幅 16〜32px) は、P1 の集中度ゲートが
+  // 「滑らかな反転」として角から**設計どおり**除外する (S字を角にしない立法・kou #9)。
+  // その結果 92珠の労力が 1 モーラに潰れていた (実測: ハッチング mc1・塗りつぶし mc2)。
+  // 角の意味論 (K/cs/確定○ = P1/P3 の立法域) には触れず、**要素数 (語の長さ) だけ**を
+  // 粗い折れ線 (弧長 40 等分・ジッタ不感) の有意な曲がり (|turn|≥0.35rad) の**符号反転**で
+  // 底上げする。同方向の曲がり (円・渦・連ループ・多角形) は反転 0 = 従来どおり。
+  // ジグザグは角数≈反転数で max() が同値 = 不変。
+  const coarseReversals = (() => {
+    let cum = [0];
+    for (let i = 1; i < points.length; i++)
+      cum.push(cum[i-1] + Math.hypot(points[i].x - points[i-1].x, points[i].y - points[i-1].y));
+    const L = cum[cum.length - 1];
+    if (L < 1e-6) return 0;
+    function at(s) {
+      let a = 0;
+      while (a < cum.length - 2 && cum[a + 1] < s) a++;
+      const span = Math.max(cum[a + 1] - cum[a], 1e-9);
+      const t = (s - cum[a]) / span;
+      return { x: points[a].x + (points[a+1].x - points[a].x) * t,
+               y: points[a].y + (points[a+1].y - points[a].y) * t };
+    }
+    const N = 40;
+    let rs = [];
+    // 端 8% トリム + 3点移動平均 (cc v2 と同じ地雷対策): 手ブレ±5px 級のジッタや
+    // ペン尾フックが粗スケールでも偽の反転を作るのを防ぐ (kou 手ブレ⊂ fixture で実測)。
+    const lo2 = L * 0.08, hi2 = L * 0.92;
+    for (let i = 0; i <= N; i++) rs.push(at(lo2 + (hi2 - lo2) * i / N));
+    rs = rs.map((p, i) => (i === 0 || i === rs.length - 1) ? p
+      : { x: (rs[i-1].x + p.x + rs[i+1].x) / 3, y: (rs[i-1].y + p.y + rs[i+1].y) / 3 });
+    let flips = 0, sign = 0;
+    for (let i = 1; i < rs.length - 1; i++) {
+      const v1x = rs[i].x - rs[i-1].x, v1y = rs[i].y - rs[i-1].y;
+      const v2x = rs[i+1].x - rs[i].x, v2y = rs[i+1].y - rs[i].y;
+      const cross = v1x * v2y - v1y * v2x, dot = v1x * v2x + v1y * v2y;
+      if (Math.abs(cross) <= 1e-9 && Math.abs(dot) <= 1e-9) continue;
+      const t = Math.atan2(cross, dot);
+      if (Math.abs(t) < 0.35) continue;
+      const s2 = t > 0 ? 1 : -1;
+      if (sign !== 0 && s2 !== sign) flips++;
+      sign = s2;
+    }
+    return flips;
+  })();
+  // ─── Step2 (2026-07-17): 転回の集中度 → 形の K (P3「真の角→破裂/流れ→清音摩擦」の形式化) ───
+  // ブーバ/キキ=完成形の印象 (Icefaceさん方針)。閉じた輪郭の総転回 (凸形は必ず 2π) が
+  // 「どこに集中して通過するか」で音色を読む:
+  //   tc = Σ(真の角の転回ピーク) / 総転回 — 三角/四角 ≈1 (全転回が頂点に集中)・円 =0 (全周に
+  //        分散)・多重ループ/渦は分母が 2π を超えて薄まる (=柔らかい)。
+  //   cs = 角の鋭さ (三角 120°転回 > 四角 90°) が キキの強度を分ける。
+  // formK = −0.85 + 0.8·tc + 1.9·cs (clamp ±1)。アンカー: 円 −0.85 / 手描き四角 ≈+0.37 /
+  // 手描き三角 ≈+0.45 / 星 → +1。スケール・始点・向きに不変 (Step1 の正準化の上に立つ)。
+  // 開いた線 (formK=null) は従来どおり軌跡の K (drawK) — 線の描き方はそれ自体が知覚。
+  //
+  // #1 8の字ガード (07-17): 閉じていても転回が相殺する形 (rot≈0/cc 低) は「一周の輪郭」でない。
+  //    旧実装は 8の字に円と同じ formK −0.85 を与えていた (実測 rot 0.00・cc 0.11)。
+  //    一周の実在 (rot≥0.7 かつ cc≥0.6) を formK の前提にする。外れたら軌跡層へ
+  //    (8の字 → 2ループの単位語 = nuuunuu 系のままで妥当)。
+  // #2 星の救済 (07-17): 自己交差する頂点優勢の閉形 (5芒星 = 紙面効率 3.62) は輪郭帯 (<3.2)
+  //    を超えるが、紛れもなく「形」でありキキの代表格 (旧実装は formK null → 軌跡 K で
+  //    ruuuu 系 = 最ブーバに逆転していた)。角の証拠が強い (角≥3・cs≥0.3・cc≥0.8・eff<4.2)
+  //    ときは正準化なしの実測から formK を出す (角 4/5 でも formK はほぼ飽和 = 始点差に頑健)。
+  //    渦 (角0) は従来どおり軌跡層・連ループは非閉で除外。eff<4.2 は 2周なぞり (4.44) を弾く保険
+  //    (通常は Step3 が先に畳む)。
+  let formK = null, turnConcentration = null;
+  const contourEff = pathLen / Math.max(1e-6, bboxDiag);
+  const lapOK = rotationFraction >= 0.7 && curveConsistency >= 0.6;
+  if (lapOK && (mClosed > 0
+      || (isClosed && corners >= 3 && cornerSharpness >= 0.3
+          && curveConsistency >= 0.8 && contourEff < 4.2))) {
+    const T = Math.max(Math.abs(totalTurning), 2 * Math.PI);
+    turnConcentration = Math.min(1, csSum / T);
+    formK = Math.max(-1, Math.min(1, -0.85 + 0.8 * turnConcentration + 1.9 * cornerSharpness));
+  }
   const loops = Math.round(rotationFraction);
-  const elements = corners + loops;
+  // #3: 要素数は max(角, 粗反転) — 角が「滑らかな反転」として除外された往復系でも労力が語長に残る
+  const elements = Math.max(corners, coarseReversals) + loops;
   const comp = elements <= 4 ? elements : 4 + (elements - 4) * 0.5;
   const sizeToLength = 0.38;
   const sizeGateRaw = Math.max(0.3, Math.min(1.15, sizeRatio / 0.5));
@@ -1403,10 +1471,11 @@ function strokeComplexity(points, w, h, maxMora = 16) {
   // formK (Step2): 完成形から読んだ K (閉形のみ・null=開いた線=従来の軌跡 K)
   // turnConcentration (Step2): 総転回のうち角に集中した割合 — 三角/四角≈1・円=0 (UI 表示用)
   // retraced (Step3): なぞり直しを 1 周へ畳んだか (UI 表示用)
+  // reversals (#3): 粗スケールの方向反転数 — 労力チャネル (語の長さ) 専用。K/cs には不使用
   return { corners, loops, moraCount, cornerSharpness, isClosed, rotationFraction, curveConsistency,
            sizeRatio, pathRatio: pathLen / Math.max(canvasDiag, 1),
            cornerPoints: firedC.map(([fi]) => ({ x: points[fi].x, y: points[fi].y })),
-           formK, turnConcentration, retraced };
+           formK, turnConcentration, retraced, reversals: coarseReversals };
 }
 
 // ─── P11 記号語彙 (2026-07-15): ⊃⊂∩∪ (開いた弧) → 母音+ん / ＜＞∧∨ (開いた一角) → 子音+ん ───
@@ -1422,6 +1491,9 @@ function openArcSignal(cx) {
   // 検出され弧を弾いていた → 鈍い角1個までは許容。実頂点 (∧ は cs≥0.25) とは鋭さで分離され、
   // S字 (cs≈0.245) は cc ゲートでも二重に除外される。
   const cornersOK = cx.corners === 0 || (cx.corners === 1 && cx.cornerSharpness < 0.15);
+  // (2026-07-17: ✓→muu 誤爆は spread 測定窓の下限 kS で根治済み — ✓ は角1が立ち
+  //  openChevron=子音+ん へ正しく落ちる。reversals ガード案は手ブレ±5px の ⊂ で
+  //  誤発火する回帰を kou fixture が検出したため不採用。)
   return cornersOK && !cx.isClosed
     && cx.rotationFraction > 0.15 && cx.rotationFraction < 0.92
     && cx.curveConsistency > 0.8;   // 波/ジグザグの相殺した回転を弧と誤判別しない (3こぶ波対策)
@@ -2690,7 +2762,7 @@ function axesEqual(a, b) {
 // (Google Apps Script 等で公開ユーザーから収集したい場合用。空なら何もしない)。
 const FEEDBACK_ENDPOINT = "";
 const FB_VERSION = 4;          // v4: 口の2軸/描線頂点列/K・角・語形タグ/エンジン版を追加 (v3: reason)
-const ENGINE_VERSION = "v16";  // 生成/音声実現の版 (集計用)。v16 = なぞり直しの正準化 (Step3: N周→1周に同一視)。v15 = 転回集中度→形のK (Step2)。v14 = 閉形の正準化 (Step1)。v13 = native FormantSynth 移植
+const ENGINE_VERSION = "v17";  // 生成/音声実現の版 (集計用)。v17 = 8の字ガード+星の救済+労力反転チャネル (アーキタイプ監査)。v16 = なぞり直し正準化 (Step3)。v15 = 転回集中度→形のK (Step2)。v14 = 閉形の正準化 (Step1)
 let feedbackLog = [];
 try { feedbackLog = JSON.parse(localStorage.getItem("onomatoi.feedback") || "[]"); } catch (e) {}
 let utteranceSeq = 0;
@@ -3334,7 +3406,11 @@ canvas.addEventListener("pointerup", ev => {
       const ev2 = vocabEvent(vocabWord, ax);
       ev2.vocabReason = vocabReason;
       playAndRemember(ev2, ax, true, "draw", extra);
-    } else if (unitEligible(seg)) {
+    } else if (unitEligible(seg) && cx.formK == null) {
+      // 形が認識された閉形 (formK 非 null) は形経路 (generate+kiki=formK) を優先 —
+      // 5芒星は巻きで loops=2 になり単位語 (ループ=音節) に取られていたが、
+      // 頂点優勢の閉形の「ループ」は描いた輪でなく巻きの副産物 (2026-07-17 監査)。
+      // 連ループびーびー/8の字は formK=null のまま = 単位語経路を保持。
       const event = generateFromUnits(seg.units, rect.width, rect.height, ax, kDraw, 0.4, mDraw);
       playAndRemember(event, ax, true, "draw", extra);
     } else {

@@ -287,5 +287,108 @@ console.log("── Step3: なぞり直しの正準化 (N 周 → 1 周に畳ん
         ch.formK === null && ch.moraCount >= 3, `formK=${ch.formK} mc=${ch.moraCount}`);
 }
 
+console.log("── アーキタイプ監査 #1〜#3 (2026-07-17): 想定ユーザーの描き方 ──");
+{
+  // 実描画条件: 入力は常時「粗い筆」珠化 (canvas対角×0.022 ステップ) を通る —
+  // 密な合成点列を直接入れると実機と別の解像度レジームになる (地雷: 診断は実描画条件で)。
+  const beadify = (pts) => {
+    const step = Math.hypot(W, H) * 0.022;
+    const out = [pts[0]];
+    for (const p of pts) {
+      const l = out[out.length - 1];
+      if (Math.hypot(p.x - l.x, p.y - l.y) >= step) out.push(p);
+    }
+    return out;
+  };
+  const cxB = (pts) => cxOf(beadify(pts));
+  const line = (x1, y1, x2, y2, n = 40) => {
+    const p = [];
+    for (let i = 0; i <= n; i++) p.push({ x: x1 + (x2 - x1) * i / n, y: y1 + (y2 - y1) * i / n });
+    return p;
+  };
+  // #1 8の字: 転回が相殺する閉形 — 円と同じ formK −0.85 を与えない (rot/cc ガード)
+  const eight = [];
+  for (let i = 0; i <= 120; i++) {
+    const t = i / 120 * 2 * Math.PI;
+    eight.push({ x: 180 + 110 * Math.sin(t), y: 180 + 70 * Math.sin(2 * t) });
+  }
+  const e8 = cxB(eight);
+  check("#1 8の字 → formK null (軌跡層=単位語圏へ)", e8.formK === null,
+        JSON.stringify({ formK: e8.formK, rot: +e8.rotationFraction.toFixed(2),
+                         cc: +e8.curveConsistency.toFixed(2) }));
+  // #2 星 (5芒星・自己交差): 紙面効率 3.62 でも「形」— formK が立ちキキ圏
+  const star = (() => {
+    const p = [];
+    const R = 130, pts = [];
+    for (let i = 0; i < 5; i++) {
+      const a = -Math.PI / 2 + i * 4 * Math.PI / 5;
+      pts.push([180 + R * Math.cos(a), 180 + R * Math.sin(a)]);
+    }
+    pts.push(pts[0]);
+    for (let i = 0; i < pts.length - 1; i++)
+      for (const q of line(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1], 20)) p.push(q);
+    return p;
+  })();
+  const st = cxB(star), stJ = cxB(jittered(star));
+  check("#2 星 → formK ≥ 0.5 (キキ圏・旧: null→軌跡Kで最ブーバに逆転)",
+        st.formK !== null && st.formK >= 0.5, `formK=${st.formK}`);
+  check("#2 星 (jitter) → formK ≥ 0.5", stJ.formK !== null && stJ.formK >= 0.5,
+        `formK=${stJ.formK}`);
+  // #3 労力チャネル: 往復系 (P1 が角を設計どおり除外する形) でも語長が労力に応じる
+  const hatch = (() => {
+    const p = [];
+    let x = 80;
+    for (let r = 0; r < 7; r++) {
+      const up = r % 2 === 0;
+      for (const q of line(x, up ? 260 : 80, x, up ? 80 : 260, 12)) p.push(q);
+      x += 32;
+      for (const q of line(x - 32, up ? 80 : 260, x, up ? 80 : 260, 3)) p.push(q);
+    }
+    return p;
+  })();
+  const ht = cxB(hatch);
+  check("#3 ハッチング → mc ≥ 5 (旧: 92珠の労力が 1 モーラ)", ht.moraCount >= 5,
+        `mc=${ht.moraCount} rev=${ht.reversals}`);
+  check("#3 ハッチング → 角 0 のまま (P1 の意味論は不変・語長だけ底上げ)", ht.corners === 0,
+        `cor=${ht.corners}`);
+  const fill = (() => {
+    const p = [];
+    let y = 140;
+    for (let r = 0; r < 14; r++) {
+      const dir = r % 2 ? -1 : 1;
+      for (const q of line(dir > 0 ? 140 : 220, y, dir > 0 ? 220 : 140, y, 10)) p.push(q);
+      y += 6;
+    }
+    return p;
+  })();
+  check("#3 塗りつぶし → mc ≥ 5", cxB(fill).moraCount >= 5,
+        `mc=${cxB(fill).moraCount}`);
+  // #3 U字デッドゾーン (折返し幅 16〜32px で角も労力も消えていた帯)
+  for (const gap of [16, 24, 32]) {
+    const u = [...line(180, 80, 180, 260, 24), ...line(180 + gap, 260, 180 + gap, 80, 24)];
+    const cu = cxB(u);
+    check(`#3 U字 幅${gap}px → mc ≥ 2 (デッドゾーン解消)`, cu.moraCount >= 2,
+          `mc=${cu.moraCount} rev=${cu.reversals}`);
+  }
+  // ✓ (kS): 頂点が角として立ち、弧語彙 (muu) に誤爆しない
+  const checkmark = [...line(110, 180, 160, 240, 10), ...line(160, 240, 260, 110, 20)];
+  const cm = cxB(checkmark);
+  check("✓ → 角 1 (kS: 短ストロークの spread 誤棄却の根治)", cm.corners === 1,
+        `cor=${cm.corners}`);
+  check("✓ → 弧語彙に落ちない", !api.circleVocabSignal(cm, { round: 0, open: 0 }) && cm.corners > 0);
+  // 回帰: 基準形の測定は不変
+  const circle = [];
+  for (let i = 0; i <= 72; i++) {
+    const t = i / 72 * 2 * Math.PI;
+    circle.push({ x: 180 + 120 * Math.cos(t), y: 180 + 120 * Math.sin(t) });
+  }
+  const ci = cxOf(circle);
+  check("回帰: 円 formK −0.85・mc 2 不変", Math.abs((ci.formK ?? 0) + 0.85) < 0.01 && ci.moraCount === 2,
+        JSON.stringify({ formK: ci.formK, mc: ci.moraCount }));
+  const tr = cxOf(TRI);
+  check("回帰: 三角 角3・mc5 不変", tr.corners === 3 && tr.moraCount === 5,
+        JSON.stringify({ cor: tr.corners, mc: tr.moraCount }));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
