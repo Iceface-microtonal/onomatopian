@@ -1398,7 +1398,7 @@ function strokeComplexity(points, w, h, maxMora = 16) {
   // ヘアピン/往復 (ハッチング・塗りつぶし・U字の折返し幅 16〜32px) は、P1 の集中度ゲートが
   // 「滑らかな反転」として角から**設計どおり**除外する (S字を角にしない立法・kou #9)。
   // その結果 92珠の労力が 1 モーラに潰れていた (実測: ハッチング mc1・塗りつぶし mc2)。
-  // 角の意味論 (K/cs/確定○ = P1/P3 の立法域) には触れず、**要素数 (語の長さ) だけ**を
+  // 角の意味論 (K/cs/確定▲ = P1/P3 の立法域) には触れず、**要素数 (語の長さ) だけ**を
   // 粗い折れ線 (弧長 40 等分・ジッタ不感) の有意な曲がり (|turn|≥0.35rad) の**符号反転**で
   // 底上げする。同方向の曲がり (円・渦・連ループ・多角形) は反転 0 = 従来どおり。
   // ジグザグは角数≈反転数で max() が同値 = 不変。
@@ -1520,15 +1520,33 @@ function strokeComplexity(points, w, h, maxMora = 16) {
   const rawMora = base + comp * sizeGate;
   const moraCount = Math.max(1, Math.min(maxMora, Math.round(rawMora)));
   // sizeRatio/pathRatio (2026-07-17): circleVocabSignal の紙面効率判定用 (native と同フィールド)
-  // cornerPoints (Step1): 判定に使った「形の角」の実座標 — ペンアップ後の確定○表示用
+  // cornerPoints (Step1): 判定に使った「形の角」の実座標 — ペンアップ後の確定▲表示用。
+  //   dx/dy = 角の外向き二等分線 (単位ベクトル)。u1=入射・u2=出射の単位ベクトルの差 =
+  //   角が尖る向き (ヘアピンでは入射の延長になり、それが知覚とも一致)。▲を「角の外側から
+  //   角を指す」向きに置くための情報。向きが取れない縮退時は dx/dy なし (位置のみ)。
   // formK (Step2): 完成形から読んだ K (閉形のみ・null=開いた線=従来の軌跡 K)
   // turnConcentration (Step2): 総転回のうち角に集中した割合 — 三角/四角≈1・円=0 (UI 表示用)
   // retraced (Step3): なぞり直しを 1 周へ畳んだか (UI 表示用)
   // reversals (#3): 粗スケールの方向反転数 — 労力チャネル (語の長さ) 専用。K/cs には不使用
   // disorder (#4): 乱雑度 0..1 — 規則的反復 (ぎざぎざ) と 乱雑 (ぐちゃぐちゃ) の分離 (立法提案)
+  const cornerDir = (fi) => {
+    // 閉形の firedC は正準添字 (mod 実周) なので近傍は輪として巡回で取る。開いた線の角は
+    // 端 2kS 以上内側が保証済み (端除外) — clamp は保険。窓は候補ゲートと同じ kS。
+    const m = mClosed > 0 ? mClosed : points.length;
+    const im = mClosed > 0 ? ((fi - kS) % m + m) % m : Math.max(0, fi - kS);
+    const ip = mClosed > 0 ? (fi + kS) % m : Math.min(points.length - 1, fi + kS);
+    const v1x = points[fi].x - points[im].x, v1y = points[fi].y - points[im].y;
+    const v2x = points[ip].x - points[fi].x, v2y = points[ip].y - points[fi].y;
+    const l1 = Math.hypot(v1x, v1y), l2 = Math.hypot(v2x, v2y);
+    if (l1 < 1e-6 || l2 < 1e-6) return null;
+    const dx = v1x / l1 - v2x / l2, dy = v1y / l1 - v2y / l2;
+    const dl = Math.hypot(dx, dy);
+    return dl < 1e-6 ? null : { dx: dx / dl, dy: dy / dl };
+  };
   return { corners, loops, moraCount, cornerSharpness, isClosed, rotationFraction, curveConsistency,
            sizeRatio, pathRatio: pathLen / Math.max(canvasDiag, 1),
-           cornerPoints: firedC.map(([fi]) => ({ x: points[fi].x, y: points[fi].y })),
+           cornerPoints: firedC.map(([fi]) =>
+             ({ x: points[fi].x, y: points[fi].y, ...(cornerDir(fi) || {}) })),
            formK, turnConcentration, retraced, reversals: coarseReversals,
            disorder: coarseDisorder };
 }
@@ -2979,7 +2997,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
 // ─── なぜ? (Onomatopoeia.explain の移植・日英) — 測って見せる説明 ───
 // ─── Step1/2/3 の「計測」を人に見える言葉にする (2026-07-17) ───
-// 確定○は角の**位置**しか見せない。ここは「形をどう読んで、その形からどう音色を決めたか」
+// 確定▲は角の**位置と向き**しか見せない。ここは「形をどう読んで、その形からどう音色を決めたか」
 // の数値を出す (Icefaceさん依頼: Step1,2 の計測を結果から見えるように)。
 function shapeMeasureLines(cx, ja) {
   const out = [];
@@ -3386,11 +3404,12 @@ function redraw() {
       if (l1 < 1e-6 || l2 < 1e-6) continue;
       const turn = Math.acos(Math.max(-1, Math.min(1, (v1x*v2x + v1y*v2y) / (l1*l2))));
       if (turn > 0.83) {
-        cctx.beginPath();
-        cctx.strokeStyle = "rgba(232,93,161,0.9)";
-        cctx.lineWidth = 2.2;
-        cctx.arc(b.x, b.y, 7.5, 0, 2 * Math.PI);
-        cctx.stroke();
+        // 実況スパークも ○→▲ (2026-07-17): 確定▲と同じ誤読 (丸マーカー=丸み) を持つため。
+        // 向き = 珠3点からの外向き二等分線。輪郭▲ = 仮 (確定は塗り▲)。
+        const dx = v1x / l1 - v2x / l2, dy = v1y / l1 - v2y / l2;
+        const dl = Math.hypot(dx, dy);
+        drawCornerTri(cctx, b, dl > 1e-6 ? dx / dl : NaN, dl > 1e-6 ? dy / dl : NaN,
+                      { gap: 4, h: 9, hw: 4.2, stroke: "rgba(232,93,161,0.9)", lineWidth: 2.2 });
       }
     }
     if (pendingPt && stroke.length > 0) {
@@ -3413,19 +3432,39 @@ function redraw() {
     stroke.forEach((p, i) => i === 0 ? cctx.moveTo(p.x, p.y) : cctx.lineTo(p.x, p.y));
     cctx.stroke();
   }
-  // Step1 確定○ (2026-07-17): ペンアップ判定が使った「形の角」。閉形は正準化後なので
-  // 描き始めの頂点 (実況○が出ない継ぎ目) にも付く — 表示と判定の一致。
+  // Step1 確定▲ (2026-07-17 ○→▲): ペンアップ判定が使った「形の角」。閉形は正準化後なので
+  // 描き始めの頂点 (実況▲が出ない継ぎ目) にも付く — 表示と判定の一致。
+  // ○ をやめた理由 (Icefaceさん 07-17): 丸み+角の分析で、角に丸いマーカーを置くと
+  // 「丸み」と誤読される。▲は角の外向き二等分線の外側から角を指す (apex=角のすぐ外)。
   for (const p of confirmedCorners) {
-    cctx.beginPath();
-    cctx.strokeStyle = "rgba(232,72,138,0.95)";
-    cctx.lineWidth = 2.6;
-    cctx.arc(p.x, p.y, 10.5, 0, 2 * Math.PI);
-    cctx.stroke();
+    drawCornerTri(cctx, p, p.dx, p.dy,
+                  { gap: 5, h: 12, hw: 5.5, fill: "rgba(232,72,138,0.95)" });
+  }
+}
+// 角マーカー▲: apex が角の gap px 外にあり、外向き二等分線 (dx,dy) に沿って角を指す。
+// 確定=塗り (fill) / 実況スパーク=輪郭 (stroke) で仮/確定の区別を保つ。
+// 向きが取れない縮退時は上向き▲で位置だけ示す。
+function drawCornerTri(ctx, p, dx, dy, { gap, h, hw, fill, stroke, lineWidth }) {
+  if (!(Number.isFinite(dx) && Number.isFinite(dy))) { dx = 0; dy = -1; }
+  const ax = p.x + dx * gap,       ay = p.y + dy * gap;        // apex (角を指す先端)
+  const bx = p.x + dx * (gap + h), by = p.y + dy * (gap + h);  // 底辺の中心
+  const nx = -dy, ny = dx;                                     // 底辺方向 (二等分線に垂直)
+  ctx.beginPath();
+  ctx.moveTo(ax, ay);
+  ctx.lineTo(bx + nx * hw, by + ny * hw);
+  ctx.lineTo(bx - nx * hw, by - ny * hw);
+  ctx.closePath();
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  if (stroke) {
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = lineWidth || 2.2;
+    ctx.lineJoin = "round";
+    ctx.stroke();
   }
 }
 function coarseInkOn() { return true; }   // 2026-07-11: 粗い筆のみ (トグル廃止・データの均質化)
 let pendingPt = null;
-let confirmedCorners = [];   // Step1: ペンアップ判定の「形の角」座標 (確定○表示・クリアで消える)
+let confirmedCorners = [];   // Step1: ペンアップ判定の「形の角」座標+外向き二等分線 (確定▲表示・クリアで消える)
 // ─── #5 多画=句 (2026-07-17): 「描線の時間構造=発話の時間構造」の多画スケール拡張 ───
 // 一筆=一語は不変。短い間 (< PHRASE_IDLE_MS) で描き継ぐと語が句に連なり、インクも薄く残る。
 // ペンの間の長さは語間の休符 (1〜3拍) に写る。長い間 = 新しい紙 (インク・句ともリセット)。
@@ -3443,7 +3482,7 @@ canvas.addEventListener("pointerdown", ev => {
   ensureCtx();
   drawing = true;
   presetShapePts = null;
-  confirmedCorners = [];   // 新しい描線 → 前回の確定○を消す
+  confirmedCorners = [];   // 新しい描線 → 前回の確定▲を消す
   // #5 多画=句: 長い間 (>8秒) は「新しい紙」— インクも句もリセット。
   // 短い間なら前の一筆のインクは薄く残り、この一筆の語が句に連なる。
   if (lastDrawPenUpAt > 0 && performance.now() - lastDrawPenUpAt > PHRASE_IDLE_MS) {
@@ -3534,8 +3573,8 @@ canvas.addEventListener("pointerup", ev => {
         ? `完全な円 → ${CIRCLE_VOCAB}（円が完成して初めて 収束の ん が立つ）`
         : `completed circle → ${CIRCLE_VOCAB} (the closing N appears only when the circle completes)`;
     }
-    // Step1 確定○: 判定に使った「形の角」(閉形は正準化後 = 描き始めの頂点も含む) を表示。
-    // 実況の○ = 軌跡がその場で曲がった点 / 確定○ = 完成形としての角 — 表示と判定を一致させる。
+    // Step1 確定▲: 判定に使った「形の角」(閉形は正準化後 = 描き始めの頂点も含む) を表示。
+    // 実況▲(輪郭線) = 軌跡がその場で曲がった点 / 確定▲(塗り) = 完成形としての角 — 表示と判定を一致させる。
     confirmedCorners = cx.cornerPoints || [];
     redraw();
     const seg = segmentStroke(inkPts);

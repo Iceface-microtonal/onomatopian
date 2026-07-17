@@ -114,7 +114,19 @@ console.log("── 三角レポート (実描線): 頂点=形の角 ──");
   check("閉形・回転 ≈1", cx.isClosed && Math.abs(cx.rotationFraction - 1) < 0.25,
         JSON.stringify({ rot: +cx.rotationFraction.toFixed(2) }));
   check("5 モーラ (角3+ループ1+サイズ)", cx.moraCount === 5, `mc=${cx.moraCount}`);
-  check("確定○の座標が 3 点返る", (cx.cornerPoints || []).length === 3);
+  check("確定▲の座標が 3 点返る", (cx.cornerPoints || []).length === 3);
+  // ○→▲ (2026-07-17): 各角の dx/dy = 外向き二等分線。凸形なら「重心から離れる向き」
+  // (dot(dir, 角−重心) > 0) かつ単位ベクトル — ▲が角の外側から角を指す前提。
+  {
+    const gx = TRI.reduce((a, p) => a + p.x, 0) / TRI.length;
+    const gy = TRI.reduce((a, p) => a + p.y, 0) / TRI.length;
+    const ok = cx.cornerPoints.every(p =>
+      Number.isFinite(p.dx) && Number.isFinite(p.dy)
+      && Math.abs(Math.hypot(p.dx, p.dy) - 1) < 1e-6
+      && p.dx * (p.x - gx) + p.dy * (p.y - gy) > 0);
+    check("確定▲の向き = 外向き二等分線 (単位・重心から離れる向き)", ok,
+          JSON.stringify(cx.cornerPoints.map(p => ({ dx: +(p.dx ?? 9).toFixed(2), dy: +(p.dy ?? 9).toFixed(2) }))));
+  }
 }
 
 console.log("── 不変性: どこから・どちら回りに描いても同じ形は同じ測定 ──");
