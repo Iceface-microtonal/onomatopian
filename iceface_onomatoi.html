@@ -575,7 +575,13 @@ function softmaxSample(scores, temperature, rand) {
   }
   return exps[exps.length - 1][0];
 }
-function pickConsonant(target, prevOnset, temperature, rand, kiki = null, manner = null, excludeNil = false) {
+// #4 乱雑度→音素 (2026-07-17 立法提案・コウさん確認待ち): 日本語の乱雑オノマトペ
+// (ぐちゃぐちゃ・めちゃくちゃ・ごちゃごちゃ・がしゃがしゃ) の音韻 = 濁阻害音+拗音/破擦。
+// disorder (0..1・null=従来と厳密互換) がこれらへ加点する。kiki/manner と同じ「注入
+// パラメータ」方式 — 語形テンプレは触らない (音素バイアスのみ・立法最小)。
+const DISORDER_PHONES = { g: 1.0, z: 1.0, j: 1.0, gy: 1.0, d: 0.7, b: 0.7, ch: 0.6 };
+const DISORDER_WEIGHT = 0.9;
+function pickConsonant(target, prevOnset, temperature, rand, kiki = null, manner = null, excludeNil = false, disorder = null) {
   const scores = [];
   if (!excludeNil) {
     // nil-onset 候補: burst の要否は kiki (あれば) で判断
@@ -601,6 +607,8 @@ function pickConsonant(target, prevOnset, temperature, rand, kiki = null, manner
     if (kiki !== null && isObstruent(c)) {
       s -= PLACE_WEIGHT * Math.abs((PLACE_ACUTE[PLACE_CLASS[c]] ?? 0) - kiki);
     }
+    // #4 乱雑度: 乱雑オノマトペの音素 (濁阻害音+拗音/破擦) へ加点 (null=従来と厳密互換)
+    if (disorder !== null) s += DISORDER_WEIGHT * disorder * (DISORDER_PHONES[c] ?? 0);
     if (prevOnset === c) s -= 0.3;             // 同子音連続ペナルティ
     scores.push([c, s]);
   }
@@ -846,7 +854,8 @@ function legalize(moras, axes, lengthHint = null, sustained = false, kiki = null
 
 function generate(axes, rand, temperature = 0.4, opts = {}) {
   const { moraCountOverride = null, kiki = null, sustained = false, lengthHint = null,
-          manner = null, forceNilOnset = false, forceConsonantOnset = false } = opts;
+          manner = null, forceNilOnset = false, forceConsonantOnset = false,
+          disorder = null } = opts;   // #4 乱雑度 (null=従来と厳密互換)
   let moraCount;
   if (moraCountOverride !== null) {
     moraCount = Math.max(1, Math.min(16, moraCountOverride));
@@ -872,7 +881,7 @@ function generate(axes, rand, temperature = 0.4, opts = {}) {
     // P11 記号語彙: 開いた弧は onset を強制的に消す (母音+ん)・開いた一角は消させない (子音+ん)。
     const onset = forceNilOnset ? null
       : pickConsonant(axes, prevOnset === undefined ? "" : prevOnset, temperature, rand,
-                      kiki, manner, forceConsonantOnset);
+                      kiki, manner, forceConsonantOnset, disorder);
     let restrict = null;
     if (onset && (PALATALIZED.has(onset) || SEMIVOWEL.has(onset))) restrict = new Set(["a","u","o"]);
     // ch は cha/chi/chu/cho/che 全て収録済 (2026-06 に che 追加) → 全母音可。
@@ -1393,12 +1402,12 @@ function strokeComplexity(points, w, h, maxMora = 16) {
   // 粗い折れ線 (弧長 40 等分・ジッタ不感) の有意な曲がり (|turn|≥0.35rad) の**符号反転**で
   // 底上げする。同方向の曲がり (円・渦・連ループ・多角形) は反転 0 = 従来どおり。
   // ジグザグは角数≈反転数で max() が同値 = 不変。
-  const coarseReversals = (() => {
+  const coarseMotion = (() => {
     let cum = [0];
     for (let i = 1; i < points.length; i++)
       cum.push(cum[i-1] + Math.hypot(points[i].x - points[i-1].x, points[i].y - points[i-1].y));
     const L = cum[cum.length - 1];
-    if (L < 1e-6) return 0;
+    if (L < 1e-6) return { flips: 0, disorder: 0 };
     function at(s) {
       let a = 0;
       while (a < cum.length - 2 && cum[a + 1] < s) a++;
@@ -1416,6 +1425,7 @@ function strokeComplexity(points, w, h, maxMora = 16) {
     rs = rs.map((p, i) => (i === 0 || i === rs.length - 1) ? p
       : { x: (rs[i-1].x + p.x + rs[i+1].x) / 3, y: (rs[i-1].y + p.y + rs[i+1].y) / 3 });
     let flips = 0, sign = 0;
+    const events = [];   // 有意な曲がりの位置と大きさ (#4 乱雑度の材料)
     for (let i = 1; i < rs.length - 1; i++) {
       const v1x = rs[i].x - rs[i-1].x, v1y = rs[i].y - rs[i-1].y;
       const v2x = rs[i+1].x - rs[i].x, v2y = rs[i+1].y - rs[i].y;
@@ -1426,9 +1436,49 @@ function strokeComplexity(points, w, h, maxMora = 16) {
       const s2 = t > 0 ? 1 : -1;
       if (sign !== 0 && s2 !== sign) flips++;
       sign = s2;
+      events.push({ i, mag: Math.abs(t) });
     }
-    return flips;
+    // ─── #4 乱雑度 (2026-07-17 アーキタイプ監査・立法提案): 規則的反復と乱雑の分離 ───
+    // 同じ「要素が多い」でも、ジグザグ/ハッチング (規則的=きれいな畳語 ぎざぎざ・じりじり) と
+    // なぐり書き (乱雑=ぐちゃぐちゃ・めちゃくちゃ) は別の知覚。8 類型の実測から決めた判別式:
+    //   自己交差 (なぐり 31/17 vs 規則形 0・星 3) と 曲がりの大きさの CV (0.67/0.32 vs ≤0.07)
+    //   の 2 つで完全分離。間隔 CV は角クラスタの割れ方の影響を受けて弱い → 不採用。
+    // 連続セグメントの曲がりは 1 クラスタに統合してから CV を取る (角の内部の偽不揃い対策)。
+    let disorder = 0;
+    if (events.length >= 4) {
+      const merged = [];
+      for (const e of events) {
+        const last = merged[merged.length - 1];
+        if (last && e.i - last.end <= 1) { last.end = e.i; last.mag += e.mag; }
+        else merged.push({ i: e.i, end: e.i, mag: e.mag });
+      }
+      const cv = (arr) => {
+        if (arr.length < 2) return 0;
+        const m = arr.reduce((a, b) => a + b, 0) / arr.length;
+        if (m <= 1e-9) return 0;
+        const v = arr.reduce((a, b) => a + (b - m) * (b - m), 0) / arr.length;
+        return Math.sqrt(v) / m;
+      };
+      const magCV = cv(merged.map(e => e.mag));
+      const segInt = (a, b, c, d) => {
+        const d1x = b.x - a.x, d1y = b.y - a.y, d2x = d.x - c.x, d2y = d.y - c.y;
+        const den = d1x * d2y - d1y * d2x;
+        if (Math.abs(den) < 1e-9) return false;
+        const t = ((c.x - a.x) * d2y - (c.y - a.y) * d2x) / den;
+        const u = ((c.x - a.x) * d1y - (c.y - a.y) * d1x) / den;
+        return t > 0.02 && t < 0.98 && u > 0.02 && u < 0.98;
+      };
+      let crossings = 0;
+      for (let a = 0; a < rs.length - 1; a++)
+        for (let b2 = a + 2; b2 < rs.length - 1; b2++)
+          if (segInt(rs[a], rs[a + 1], rs[b2], rs[b2 + 1])) crossings++;
+      disorder = Math.max(0, Math.min(1,
+        0.55 * Math.min(1, crossings / 10) + 0.45 * Math.min(1, magCV * 2)));
+    }
+    return { flips, disorder };
   })();
+  const coarseReversals = coarseMotion.flips;
+  const coarseDisorder = coarseMotion.disorder;
   // ─── Step2 (2026-07-17): 転回の集中度 → 形の K (P3「真の角→破裂/流れ→清音摩擦」の形式化) ───
   // ブーバ/キキ=完成形の印象 (Icefaceさん方針)。閉じた輪郭の総転回 (凸形は必ず 2π) が
   // 「どこに集中して通過するか」で音色を読む:
@@ -1475,10 +1525,12 @@ function strokeComplexity(points, w, h, maxMora = 16) {
   // turnConcentration (Step2): 総転回のうち角に集中した割合 — 三角/四角≈1・円=0 (UI 表示用)
   // retraced (Step3): なぞり直しを 1 周へ畳んだか (UI 表示用)
   // reversals (#3): 粗スケールの方向反転数 — 労力チャネル (語の長さ) 専用。K/cs には不使用
+  // disorder (#4): 乱雑度 0..1 — 規則的反復 (ぎざぎざ) と 乱雑 (ぐちゃぐちゃ) の分離 (立法提案)
   return { corners, loops, moraCount, cornerSharpness, isClosed, rotationFraction, curveConsistency,
            sizeRatio, pathRatio: pathLen / Math.max(canvasDiag, 1),
            cornerPoints: firedC.map(([fi]) => ({ x: points[fi].x, y: points[fi].y })),
-           formK, turnConcentration, retraced, reversals: coarseReversals };
+           formK, turnConcentration, retraced, reversals: coarseReversals,
+           disorder: coarseDisorder };
 }
 
 // ─── P11 記号語彙 (2026-07-15): ⊃⊂∩∪ (開いた弧) → 母音+ん / ＜＞∧∨ (開いた一角) → 子音+ん ───
@@ -1673,7 +1725,8 @@ function polishUnits(moras, axes, kiki = null) {
   if (out.length > 16) out = out.slice(0, 16);
   return out;
 }
-function generateFromUnits(units, w, h, globalAxes, kiki = null, temperature = 0.4, manner = null) {
+function generateFromUnits(units, w, h, globalAxes, kiki = null, temperature = 0.4, manner = null,
+                           disorder = null) {   // #4 乱雑度 (null=従来と厳密互換)
   const step = 0.0001 + 0.7 * 0.4;   // tuning.repetition 0.7: 同じループ = 同じ音節
   const quant = ax => {
     const q = v => Math.round(v / step) * step;
@@ -1697,7 +1750,7 @@ function generateFromUnits(units, w, h, globalAxes, kiki = null, temperature = 0
           ? mannerProfile(ax.sharp, ucx.corners, ucx.cornerSharpness, ax.tex, 1)
           : null;
         const rand = mulberry32(axesSeed(ax, salt));
-        const onset = pickConsonant(ax, "", temperature, rand, kUnit, mUnit);
+        const onset = pickConsonant(ax, "", temperature, rand, kUnit, mUnit, false, disorder);
         let restrict = null;
         if (onset && (PALATALIZED.has(onset) || SEMIVOWEL.has(onset))) restrict = new Set(["a","u","o"]);
         const vowel = pickVowel(ax, null, temperature, restrict, rand);
@@ -2806,7 +2859,7 @@ function axesEqual(a, b) {
 // (Google Apps Script 等で公開ユーザーから収集したい場合用。空なら何もしない)。
 const FEEDBACK_ENDPOINT = "";
 const FB_VERSION = 4;          // v4: 口の2軸/描線頂点列/K・角・語形タグ/エンジン版を追加 (v3: reason)
-const ENGINE_VERSION = "v17";  // 生成/音声実現の版 (集計用)。v17 = 8の字ガード+星の救済+労力反転チャネル (アーキタイプ監査)。v16 = なぞり直し正準化 (Step3)。v15 = 転回集中度→形のK (Step2)。v14 = 閉形の正準化 (Step1)
+const ENGINE_VERSION = "v18";  // 生成/音声実現の版 (集計用)。v18 = 乱雑度→濁音・拗音 (#4 立法提案)。v17 = 8の字ガード+星の救済+労力反転チャネル。v16 = なぞり直し正準化。v15 = 転回集中度→形のK。v14 = 閉形の正準化
 let feedbackLog = [];
 try { feedbackLog = JSON.parse(localStorage.getItem("onomatoi.feedback") || "[]"); } catch (e) {}
 let utteranceSeq = 0;
@@ -2950,6 +3003,11 @@ function shapeMeasureLines(cx, ja) {
                             : (ja ? "開いた線" : "open line");
     out.push(ja ? `形: ${why} → 音色は軌跡から読む`
                 : `form: ${why} → tone is read from the trajectory`);
+  }
+  // #4 乱雑度 (立法提案): 閾値 0.4 以上のときだけ効く・表示する
+  if ((cx.disorder ?? 0) >= 0.4) {
+    out.push(ja ? `乱雑度 ${cx.disorder.toFixed(2)} (曲がりの不揃い・自己交差) → 濁音・拗音寄り (ぐちゃぐちゃ系)`
+                : `disorder ${cx.disorder.toFixed(2)} (uneven turns, self-crossings) → voiced/palatalized (gucha-gucha zone)`);
   }
   return out;
 }
@@ -3489,6 +3547,9 @@ canvas.addEventListener("pointerup", ev => {
     // 明示フィールドしか写さないので、ここに載せても投票データには入らない。
     const extra = { k: kDraw, corners: cx.corners, cs: cx.cornerSharpness,
                     loops: cx.loops, stroke: beads, shape: cx };
+    // #4 乱雑度: 閾値 0.4 以上のときだけ生成へ注入 (規則的な描線は null = 従来と厳密互換)。
+    // 8類型の実測分離: なぐり書き ≥0.84 / 規則形 (ジグザグ・ハッチング・星・波) ≤0.17。
+    const disorder = cx.disorder >= 0.4 ? cx.disorder : null;
     if (vocabWord) {
       const ev2 = vocabEvent(vocabWord, ax);
       ev2.vocabReason = vocabReason;
@@ -3498,13 +3559,14 @@ canvas.addEventListener("pointerup", ev => {
       // 5芒星は巻きで loops=2 になり単位語 (ループ=音節) に取られていたが、
       // 頂点優勢の閉形の「ループ」は描いた輪でなく巻きの副産物 (2026-07-17 監査)。
       // 連ループびーびー/8の字は formK=null のまま = 単位語経路を保持。
-      const event = generateFromUnits(seg.units, rect.width, rect.height, ax, kDraw, 0.4, mDraw);
+      const event = generateFromUnits(seg.units, rect.width, rect.height, ax, kDraw, 0.4, mDraw,
+                                      disorder);
       playAndRemember(event, ax, true, "draw", extra);
     } else {
       generateAndPlay(ax, 0, true, "draw",
                       { moraCountOverride: openChevron ? 1 : cx.moraCount,
                         kiki: kDraw, manner: mDraw, sustained, lengthHint: cx.moraCount,
-                        forceConsonantOnset: openChevron }, extra);
+                        forceConsonantOnset: openChevron, disorder }, extra);
     }
   }
   ev.preventDefault();
