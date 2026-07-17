@@ -125,6 +125,9 @@
     </span>
     <div class="result-meta" id="result-meta"></div>
   </div>
+  <!-- #5 多画=句 (2026-07-17): 短い間で描き継いだ複数の一筆が句として連なる。▶PLAY で通し再生 -->
+  <div id="phrase-line" style="display:none; margin-top:4px; font-size:11px; color:var(--gray);
+    font-family: 'SF Mono', Menlo, monospace;"></div>
   <div class="chips" id="fb-tags" style="display:none; margin-top:4px;"></div>
   <div id="why-panel" style="display:none; margin-top:6px;">
     <div id="why-title" style="font-size:10px; font-weight:800; color:var(--pink); letter-spacing:0.5px;">なぜ?</div>
@@ -2628,6 +2631,47 @@ function scheduleEventNative(ctx, event) {
   return true;
 }
 
+// ─── #5 多画=句: 句の通し再生 (2026-07-17) ───
+// 各語を**逐次スケジュール** (語ごとの1バッファをオフセット起動)。語を1イベントに結合しない —
+// 結合すると baseF0 が1つになり「大きい丸=低い声」等の語ごとの声の高さが失われる。
+// 語間の休符 = restBeats 拍 (ペンの間の写像・1拍 = 30/120 秒)。
+// legacy 音声 (?voice=legacy) では通し再生は最後の語のみ (native レンダラ前提の機能)。
+function schedulePhraseNative(ctx, items) {
+  if (nvBankStamp !== sampleBank.size || !nvBank) {
+    nvBank = buildNativeVoiceBank(ctx.sampleRate);
+    nvBankStamp = sampleBank.size;
+  }
+  const bank = nvBank;
+  if (!bank || bank.cv.size === 0 || bank.v.size === 0) return false;
+  const moraSec = 30.0 / 120;
+  const t0 = ctx.currentTime + 0.04;
+  let acc = 0;
+  for (const it of items) {
+    const res = nvRenderEvent(it.event.moras, bank, bank.sr, moraSec * 1000);
+    if (!res || !res.frames) continue;
+    acc += (it.restBeats || 0) * moraSec;
+    const buf = ctx.createBuffer(1, res.data.length, bank.sr);
+    buf.getChannelData(0).set(res.data);
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx.destination);
+    src.start(t0 + acc);
+    activeNodes.push(src);
+    acc += res.totalSec;
+  }
+  return acc > 0;
+}
+function updatePhraseLine() {
+  const el = document.getElementById("phrase-line");
+  if (!el) return;
+  if (phraseWordsDrawn.length <= 1) { el.style.display = "none"; el.textContent = ""; return; }
+  const words = phraseWordsDrawn.map(it => it.word).join(" ");
+  el.textContent = (uiLang === "ja")
+    ? `句 (${phraseWordsDrawn.length}画): ${words} — ▶PLAY で通し`
+    : `phrase (${phraseWordsDrawn.length} strokes): ${words} — ▶PLAY plays all`;
+  el.style.display = "";
+}
+
 // ─── 再生: BPM グリッド (1 mora = 30000/BPM ms, 発話テンポ統一) ───
 let activeNodes = [];
 function stopAll() {
@@ -2994,6 +3038,19 @@ function updateWhy(ax, moras, vocabReason = null, shape = null) {
 function playAndRemember(event, axesUsed, log, src = "tune", extra = {}) {
   lastEvent = event;
   lastEventAxes = { ...axesUsed };
+  // #5 多画=句: draw の一筆だけが句に積まれる (TUNE/preset/romaji は積まない)。
+  // ペンの間 → 語間の休符 1〜3拍 (時間構造の写像・>PHRASE_IDLE_MS は pointerdown で新しい紙)。
+  if (src === "draw") {
+    const now = performance.now();
+    const pauseSec = lastDrawPenUpAt > 0 ? (now - lastDrawPenUpAt) / 1000 : 0;
+    const restBeats = phraseWordsDrawn.length === 0 ? 0
+      : Math.min(3, Math.max(1, Math.round(pauseSec)));
+    phraseWordsDrawn.push({ event, word: romajiOf(event), restBeats });
+    strokeHistoryInk.push(stroke.map(p => ({ x: p.x, y: p.y })));
+    while (phraseWordsDrawn.length > 8) { phraseWordsDrawn.shift(); strokeHistoryInk.shift(); }
+    lastDrawPenUpAt = now;
+    updatePhraseLine();
+  }
   // 投票対象を更新 (再生のたびに新しい発話 ID。PLAY リピートでは更新しない)
   utteranceSeq += 1;
   const r3 = v => Math.round((v ?? 0) * 1000) / 1000;
@@ -3225,6 +3282,19 @@ function resizeCanvas() {
 function redraw() {
   const rect = canvas.getBoundingClientRect();
   cctx.clearRect(0, 0, rect.width, rect.height);
+  // #5 多画=句: 句に属する過去の一筆を薄く残す (iPad の履歴表示と同じ様式・古いほど薄い)
+  for (let h = 0; h < strokeHistoryInk.length; h++) {
+    const pts = strokeHistoryInk[h];
+    if (pts.length < 2) continue;
+    const age = strokeHistoryInk.length - h;
+    cctx.beginPath();
+    cctx.strokeStyle = `rgba(40,40,40,${Math.max(0.10, 0.42 - age * 0.06)})`;
+    cctx.lineWidth = 4;
+    cctx.lineCap = "round";
+    cctx.lineJoin = "round";
+    pts.forEach((p, i) => i === 0 ? cctx.moveTo(p.x, p.y) : cctx.lineTo(p.x, p.y));
+    cctx.stroke();
+  }
   // プリセット見本の形 (薄ピンク)
   if (presetShapePts && presetShapePts.length > 1) {
     cctx.beginPath();
@@ -3298,6 +3368,15 @@ function redraw() {
 function coarseInkOn() { return true; }   // 2026-07-11: 粗い筆のみ (トグル廃止・データの均質化)
 let pendingPt = null;
 let confirmedCorners = [];   // Step1: ペンアップ判定の「形の角」座標 (確定○表示・クリアで消える)
+// ─── #5 多画=句 (2026-07-17): 「描線の時間構造=発話の時間構造」の多画スケール拡張 ───
+// 一筆=一語は不変。短い間 (< PHRASE_IDLE_MS) で描き継ぐと語が句に連なり、インクも薄く残る。
+// ペンの間の長さは語間の休符 (1〜3拍) に写る。長い間 = 新しい紙 (インク・句ともリセット)。
+// フィードバック/なぜ? は従来どおり最後の一筆の語に付く (v17 holdout を汚さない)。
+// iPad には明示的な COMPOSE モードが既にある — web はこのアンビエント版 (非対称は意図)。
+const PHRASE_IDLE_MS = 8000;
+let phraseWordsDrawn = [];   // [{ event, word, restBeats }] — restBeats = 直前のペンの間 (拍)
+let strokeHistoryInk = [];   // 句に属する過去の一筆のインク (薄表示)
+let lastDrawPenUpAt = 0;     // 直近の draw ペンアップ時刻 (performance.now)
 function pointerPos(ev) {
   const rect = canvas.getBoundingClientRect();
   return { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
@@ -3307,6 +3386,14 @@ canvas.addEventListener("pointerdown", ev => {
   drawing = true;
   presetShapePts = null;
   confirmedCorners = [];   // 新しい描線 → 前回の確定○を消す
+  // #5 多画=句: 長い間 (>8秒) は「新しい紙」— インクも句もリセット。
+  // 短い間なら前の一筆のインクは薄く残り、この一筆の語が句に連なる。
+  if (lastDrawPenUpAt > 0 && performance.now() - lastDrawPenUpAt > PHRASE_IDLE_MS) {
+    strokeHistoryInk = [];
+    phraseWordsDrawn = [];
+    lastDrawPenUpAt = 0;
+    updatePhraseLine();
+  }
   stroke = [pointerPos(ev)];
   canvas.setPointerCapture(ev.pointerId);
   ev.preventDefault();
@@ -3425,7 +3512,17 @@ canvas.addEventListener("pointerup", ev => {
 
 // ─── TUNE / プリセット / ROMAJI / その他 UI 配線 ───
 document.getElementById("btn-play").addEventListener("click", () => {
-  ensureCtx();
+  const ctx = ensureCtx();
+  // #5 多画=句: 句 (2語以上) があれば通しで再生 — 各語の声の高さ/音色は保持 (逐次スケジュール)。
+  // 投票対象 (currentUtterance) は更新しない = PLAY は再演であって新しい発話ではない。
+  if (phraseWordsDrawn.length > 1 && nativeVoiceMode() === "native" && ctx.state === "running") {
+    stopAll();
+    try {
+      if (schedulePhraseNative(ctx, phraseWordsDrawn)) return;
+    } catch (e) {
+      console.warn("phrase replay failed — fall back to last word", e);
+    }
+  }
   // 軸が変わっていなければ「最後の発声そのもの」をリピート (描画直後の語を何度でも)。
   // スライダーを動かした (= 軸が変わった) ときだけ新規生成する。
   if (lastEvent && axesEqual(lastAxes, lastEventAxes)) {
@@ -3595,6 +3692,10 @@ document.getElementById("btn-clear").addEventListener("click", () => {
   stroke = [];
   presetShapePts = null;
   confirmedCorners = [];
+  strokeHistoryInk = [];        // #5: 句のインクと語列もリセット
+  phraseWordsDrawn = [];
+  lastDrawPenUpAt = 0;
+  updatePhraseLine();
   redraw();
   setSliders({ size: 0, sharp: 0, tex: 0, bright: 0 });
   lastEvent = null;
