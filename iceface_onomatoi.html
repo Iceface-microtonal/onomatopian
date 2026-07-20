@@ -3849,10 +3849,12 @@ canvas.addEventListener("pointerdown", ev => {
   drawing = true;
   presetShapePts = null;
   confirmedCorners = [];   // 新しい描線 → 前回の確定▲を消す
-  // #5 多画=句: 長い間 (>8秒) は「新しい紙」— インクも句もリセット。
-  // 短い間なら前の一筆のインクは薄く残り、この一筆の語が句に連なる。
+  // 2026-07-20 作者指示: 新しい一筆で前のインクは**常に**消す (紙は毎筆新しい)。
+  // 旧: 8秒以内の描き継ぎでは薄く残していたが「薄く残り続ける」と作者 NG。
+  // #5 多画=句の連なり自体 (phraseWordsDrawn・8秒窓・句ライン表示) は音の構造として維持 —
+  // 句の可視の指標はインクでなく句ラインが担う。
+  strokeHistoryInk = [];
   if (lastDrawPenUpAt > 0 && performance.now() - lastDrawPenUpAt > PHRASE_IDLE_MS) {
-    strokeHistoryInk = [];
     phraseWordsDrawn = [];
     lastDrawPenUpAt = 0;
     updatePhraseLine();
