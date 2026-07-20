@@ -164,6 +164,13 @@
   <div class="knob-row dev-only" style="margin-top:10px;">
     <span class="knob">hand corr <input type="range" id="kn-hc" min="0" max="1.5" step="0.05" value="0"><span id="val-hc">0.00</span></span>
   </div>
+  <!-- 命名モード (配置層 Phase1-4, 2026-07-20) dev UI: ?dev=1 でのみ表示・既定 OFF。
+       ON のとき draw の生成経路を丸ごと namingDecompose→namingGenerateClean に置き換える
+       (P11/P12 記号語彙より優先 — モードスイッチなので命名が全てを上書きする)。 -->
+  <div class="knob-row dev-only" style="margin-top:10px;">
+    <span class="knob"><input type="checkbox" id="naming-toggle"> 命名モード (naming)</span>
+    <span class="knob">対照 <input type="range" id="naming-contrast" min="0" max="1" step="0.05" value="0"><span id="val-naming-contrast">0.00</span></span>
+  </div>
 </div>
 
 <!-- Romaji direct input (v11 で外し 2026-07-17 復活 — v13 native レンダラの実聴にも使う) -->
@@ -248,6 +255,10 @@
  *    モーラ個別再アタック (v12) は ?voice=legacy でいつでも戻せる (フォールバックも自動)。
  *    diph_* は非圧縮 .wav を優先ロード (mp3 は継ぎ足し読みに弱い — フレーム量子化で
  *    定常部が揺れる/先頭パディングで位置がずれる)。warabe 音程バリアントは移植しない。
+ * 2026-07-20 命名モード (配置層) v19: 完成形を解体し特徴の強度序列を語内配置 (頭=最強特徴/
+ *    中=第二特徴/末=終止モード) へ変換する第2の生成経路 (namingDecompose/namingSlots/
+ *    namingGenerate/namingGenerateClean, P4 対照モード込み)。実況 (generate/legalize,
+ *    ENGINE_VERSION) には無変更 — dev 専用 (?dev=1) トグル OFF (既定) では 1 bit も変わらない。
  * ============================================================ */
 
 const SAMPLE_BASE = "./ConsonantsOnomatoi/";   // wav の場所 (開発用: プロジェクト内参照)
@@ -1549,6 +1560,361 @@ function strokeComplexity(points, w, h, maxMora = 16) {
              ({ x: points[fi].x, y: points[fi].y, ...(cornerDir(fi) || {}) })),
            formK, turnConcentration, retraced, reversals: coarseReversals,
            disorder: coarseDisorder };
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ─── NamingPlacement (命名モード・配置層 Phase1-4, 2026-07-20 移植) ───
+// 正本: OnomatoiCore/Sources/OnomatoiCore/Core/NamingPlacement.swift。
+// 実況 (generate/legalize) は「描線の時間構造 = 発話の時間構造」を写す。命名は
+// 完成形を解体し、特徴の強度序列を語内配置 (語頭=最強特徴/語中=第二特徴/語末=
+// 終止モード) へ変換する第2の生成経路 — 実況側の関数・挙動には一切触れない
+// (pickConsonant/pickVowel/geminateGapMs/mulberry32 を再利用するのみ)。
+// dev トグル (?dev=1) が ON のときだけ pointerup から呼ばれる。既定 OFF では
+// このブロックは一切実行されない = 既存経路は 1 bit も変わらない。
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+function namingClamp01(x) { return Math.max(0, Math.min(1, x)); }
+
+// ─── strength 計算の係数 (NamingPlacement.swift の定数そのまま。名前は意図を記す) ───
+const NAMING_SALIENCE_FLOOR = 0.25;               // これ未満の特徴は捨てる (何でも盛り込まない)
+const NAMING_SPIKE_CORNER_THRESHOLD = 3;          // 角がこれ以下なら「少数の尖り」= 満点
+const NAMING_SPIKE_MANY_CORNERS_SCALE = 0.6;      // 角が多いと針でなくギザギザ寄り → 減衰
+const NAMING_ROUND_CLOSED_BONUS = 0.3;            // 閉じた輪郭は丸みの証拠 (閉じた四角が中程度の+になるのは意図通り=ごつごつ)
+const NAMING_ROUND_ARC_SCALE = 0.6;               // 開いた弧の丸み (rotationFraction×一貫性)
+const NAMING_ROUND_LOOP_BONUS = 0.25;             // ループ1個ごとの丸み加点 (ぐるぐる)
+const NAMING_ROUND_LOOP_CAP = 2;                  // ループ加点の上限個数
+const NAMING_EDGE_CORNER_CENTER = 4.0;            // 角4個 (四角) を edge の中心に
+const NAMING_EDGE_CORNER_RANGE = 3.0;
+// edge の cornerSharpness 中心 = 正方形の実測帯 (0.32)。凸多角形は外角総和 2π の不変量により
+// 平均転回角が頂点数だけで決まる (正方90°→cs≈0.32・正三角120°→cs≈0.55)。中心 0.5 は
+// 「cs≈角度/180°」の誤較正で正三角が edge の山に乗り spike に勝ってしまっていた —
+// 中心を四角帯 0.32・幅 0.25 に絞ると既定感度のままで三角/四角が分離する (Swift 側の教訓そのまま)。
+const NAMING_EDGE_SHARP_CENTER = 0.32;
+const NAMING_EDGE_SHARP_RANGE = 0.25;
+const NAMING_FLAT_CLOSED_SCALE = 1.0;
+const NAMING_FLAT_OPEN_SCALE = 0.5;               // 開いた線の扁平は半分の重みで拾う (暫定 proxy)
+
+// ─── 序列の決定性 ───
+const NAMING_TIE_BAND = 0.1;   // strength 差がこの値未満なら「同点近傍」= kind 優先表で決着
+const NAMING_KIND_PRIORITY = { mass: 0, round: 1, spike: 2, edge: 3, repeatN: 4, flat: 5 };
+
+// ─── ClosureMode 判定の閾値 ───
+const NAMING_CLOSURE_CLOSED_CUT_THRESHOLD = 0.6;   // 閉形: これ以上鋭い折返しなら cut (角)
+const NAMING_CLOSURE_OPEN_CUT_THRESHOLD = 0.5;     // 開形: 末尾近傍の折返しがこれ以上なら cut
+const NAMING_CLOSURE_LONG_PATH_RATIO = 0.35;       // 角のない開いた線がこの経路長比以上なら ー (余韻)
+
+// ─── 配置 (特徴序列 → スロット列) の閾値 ───
+const NAMING_HEAD_TWO_MORA_THRESHOLD = 0.75;   // 頭スロットが2モーラになる強度
+const NAMING_BODY_TWO_MORA_THRESHOLD = 0.5;    // 中スロットが2モーラになる強度
+
+// ─── P4 対照モード (ドデカミン構造) の係数 ───
+const NAMING_CONTRAST_SIZE_WEIGHT = 1.0;       // 主軸 (コーパス実測: ドデカミン Δsize +1.00)
+const NAMING_CONTRAST_SHARP_WEIGHT = 0.7;      // 副軸
+const NAMING_CONTRAST_MINOR_WEIGHT = 0.5;      // brightness/roundness/openness (口の反転)
+const NAMING_CONTRAST_TAIL_THRESHOLD = 0.0;    // これを超えると対照尾スロットが付く (0 = P2 厳密互換)
+const NAMING_CONTRAST_NASAL_UPGRADE_THRESHOLD = 0.3;   // 頭極性がこれを超え open なら nasal 昇格
+
+/// 純関数版の解体: 既存の公開量 (大域軸 + strokeComplexity) から FeatureInventory を作る。
+/// 新しい画像解析はしない (NamingPlacement.decompose(axes:complexity:) の移植)。
+/// 戻り値: { features: [{kind, strength}...], closure: "nasal"|"cut"|"open"|"long", axes }
+function namingDecompose(axes, cx) {
+  const spike = namingClamp01(cx.cornerSharpness)
+    * (cx.corners <= NAMING_SPIKE_CORNER_THRESHOLD ? 1.0 : NAMING_SPIKE_MANY_CORNERS_SCALE);
+  const mass = namingClamp01(axes.size);
+  // round は「完成形の丸さ」を測る (描線の滑らかさではない — 直線も正方形も滑らかさは round≈1
+  // になってしまう誤読が実出力デモで発覚した経緯が Swift 側にある)。formK (完成形の K: 円-0.85/
+  // 手描き三角≈+0.45/四角≈+0.55) がある閉形はそれを使い、無い形 (開いた線・渦・多重ループ) は
+  // 弧の回転量×向きの一貫性+ループ数で代替する (半円弧=中程度・ぐるぐる渦=強・直線/ジグザグ/波
+  // =rotationFraction 相殺で 0)。
+  let round;
+  if (cx.formK !== null && cx.formK !== undefined) {
+    round = namingClamp01(Math.max(0, -cx.formK) + (cx.isClosed ? NAMING_ROUND_CLOSED_BONUS : 0));
+  } else {
+    round = namingClamp01(
+      NAMING_ROUND_ARC_SCALE * Math.min(1, cx.rotationFraction) * Math.max(0, cx.curveConsistency)
+      + NAMING_ROUND_LOOP_BONUS * Math.min(cx.loops, NAMING_ROUND_LOOP_CAP)
+    );
+  }
+  // edge: 角4個前後 (四角) × cornerSharpness 中庸 (直角帯) で最大。三角 (角3・高鋭) は edgeCorner
+  // が下がり spike に譲る — 三角/四角の分離が本設計の要。
+  const edgeCorner = namingClamp01(1 - Math.abs(cx.corners - NAMING_EDGE_CORNER_CENTER) / NAMING_EDGE_CORNER_RANGE);
+  const csMid = namingClamp01(1 - Math.abs(cx.cornerSharpness - NAMING_EDGE_SHARP_CENTER) / NAMING_EDGE_SHARP_RANGE);
+  const edge = edgeCorner * csMid;
+  const repeatN = namingClamp01(axes.tex);
+  const flat = namingClamp01(Math.max(0, -axes.round) * (cx.isClosed ? NAMING_FLAT_CLOSED_SCALE : NAMING_FLAT_OPEN_SCALE));
+
+  const all = [
+    { kind: "spike", strength: spike },
+    { kind: "mass", strength: mass },
+    { kind: "round", strength: round },
+    { kind: "edge", strength: edge },
+    { kind: "repeatN", strength: repeatN },
+    { kind: "flat", strength: flat },
+  ];
+  const ranked = namingRankFeatures(all);
+  const survivors = ranked.filter(f => f.strength >= NAMING_SALIENCE_FLOOR);
+  // 全滅時も features は必ず非空 (最強1件を残す) — ranked は必ず6要素あるので ranked[0] は安全。
+  const features = survivors.length > 0 ? survivors : [ranked[0]];
+
+  return { features, closure: namingClosureMode(cx), axes: { ...axes } };
+}
+
+/// strength 降順に安定ソート。差 < tieBand の近傍は kindPriority で決着させる (決定性の担保)。
+function namingRankFeatures(features) {
+  return features.slice().sort((a, b) => {
+    if (Math.abs(a.strength - b.strength) < NAMING_TIE_BAND) {
+      return (NAMING_KIND_PRIORITY[a.kind] ?? 0) - (NAMING_KIND_PRIORITY[b.kind] ?? 0);
+    }
+    return b.strength - a.strength;
+  });
+}
+
+/// ClosureMode 判定 (文字列で表現: "nasal"|"cut"|"open"|"long")。
+function namingClosureMode(cx) {
+  if (cx.isClosed) {
+    return cx.cornerSharpness < NAMING_CLOSURE_CLOSED_CUT_THRESHOLD ? "nasal" : "cut";
+  }
+  if (cx.cornerSharpness >= NAMING_CLOSURE_OPEN_CUT_THRESHOLD && cx.corners >= 1) {
+    return "cut";
+  }
+  // 角のない長い一筆 = 流線の余韻 → ー。短い線・曲がる線は開音節のまま。
+  if (cx.corners === 0 && cx.pathRatio >= NAMING_CLOSURE_LONG_PATH_RATIO) {
+    return "long";
+  }
+  return "open";
+}
+
+// ─── 配置 (特徴序列 → スロット列) ───
+
+/// kind → スロットのターゲット軸 (写像表そのまま。st = strength)。
+function namingSlotAxes(kind, st) {
+  switch (kind) {
+    case "spike":   return { size: -0.5 * st, sharp:  0.9 * st, tex: 0,        bright:  0.4 * st, round: -0.3 * st, open: -0.3 * st };
+    case "mass":    return { size:  0.9 * st, sharp: -0.1 * st, tex: 0,        bright: -0.4 * st, round:  0.2 * st, open:  0.4 * st };
+    case "round":   return { size:  0,        sharp: -0.9 * st, tex: 0,        bright: -0.2 * st, round:  0.6 * st, open:  0 };
+    case "edge":    return { size:  0.5 * st, sharp:  0.6 * st, tex: 0.2 * st, bright:  0,        round:  0,        open:  0.3 * st };
+    case "repeatN": return { size:  0,        sharp:  0,        tex: 0.9 * st, bright:  0,        round:  0,        open:  0 };
+    case "flat":    return { size:  0.2 * st, sharp:  0.4 * st, tex: 0,        bright:  0.2 * st, round:  0.3 * st, open:  0.2 * st };
+    default:        return { size: 0, sharp: 0, tex: 0, bright: 0, round: 0, open: 0 };
+  }
+}
+/// kind → 調音方法プロファイル ({p,a,f,s} = 破裂/破擦/摩擦/共鳴。写像表そのまま・全成分×strength)。
+function namingSlotManner(kind, st) {
+  switch (kind) {
+    case "spike":   return { p: 1.0 * st, a: 0.5 * st, f: 0.1 * st, s: 0 };
+    case "mass":    return { p: 0.8 * st, a: 0,        f: 0.1 * st, s: 0.4 * st };
+    case "round":   return { p: 0,        a: 0,        f: 0.2 * st, s: 1.0 * st };
+    case "edge":    return { p: 1.0 * st, a: 0.3 * st, f: 0,        s: 0 };
+    case "repeatN": return { p: 0,        a: 0.8 * st, f: 0.6 * st, s: 0.2 * st };
+    case "flat":    return { p: 1.0 * st, a: 0,        f: 0.2 * st, s: 0.2 * st };
+    default:        return { p: 0, a: 0, f: 0, s: 0 };
+  }
+}
+
+/// 対照尾スロット: 頭の軸を軸別重みで反転した1モーラ (ドデカミンの「ミ」/まる子の「こ」)。
+function namingContrastTailSlot(headAxes, c) {
+  const axes = {
+    size:  -headAxes.size   * NAMING_CONTRAST_SIZE_WEIGHT  * c,
+    sharp: -headAxes.sharp  * NAMING_CONTRAST_SHARP_WEIGHT * c,
+    tex: 0,
+    bright: -headAxes.bright * NAMING_CONTRAST_MINOR_WEIGHT * c,
+    round:  -headAxes.round  * NAMING_CONTRAST_MINOR_WEIGHT * c,
+    open:   -headAxes.open   * NAMING_CONTRAST_MINOR_WEIGHT * c,
+  };
+  // 尾の調音方法は反転後の鋭さ極性から: 丸尾 → 共鳴 (ミ/りん)、鋭尾 → 破裂 (こ/く)。
+  const ts = Math.max(-1, Math.min(1, axes.sharp));
+  const manner = { p: Math.max(0, ts), a: 0.3 * Math.max(0, ts), f: 0, s: Math.max(0, -ts) };
+  return { axes, manner, moraCount: 1 };
+}
+
+/// P4: 頭極性 (対照と closure 昇格の判定に使う)。size 主軸 + sharpness 副軸の符号付き強度。
+function namingHeadPolarity(slots) {
+  if (slots.length === 0) return 0;
+  const h = slots[0];
+  return 0.6 * h.axes.size + 0.4 * h.axes.sharp;
+}
+
+/// 特徴序列 → スロット列 (頭・中・対照尾)。features[0]=頭(最強)、features[1]=中(第二特徴)。
+/// features[2] 以降は使わない (salience 上位2特徴まで — 1作1概念の命名版)。
+/// contrast > 0 なら頭極性を反転した1モーラの対照尾スロットを足す (P4)。
+function namingSlots(inventory, contrast = 0) {
+  const out = [];
+  const features = inventory.features;
+  if (!features || features.length === 0) return out;
+  const head = features[0];
+  const headAxes = namingSlotAxes(head.kind, head.strength);
+  out.push({
+    axes: headAxes,
+    manner: namingSlotManner(head.kind, head.strength),
+    moraCount: head.strength >= NAMING_HEAD_TWO_MORA_THRESHOLD ? 2 : 1,
+  });
+  if (features.length >= 2) {
+    const body = features[1];
+    out.push({
+      axes: namingSlotAxes(body.kind, body.strength),
+      manner: namingSlotManner(body.kind, body.strength),
+      moraCount: body.strength >= NAMING_BODY_TWO_MORA_THRESHOLD ? 2 : 1,
+    });
+  }
+  if (contrast > NAMING_CONTRAST_TAIL_THRESHOLD) {
+    out.push(namingContrastTailSlot(headAxes, Math.min(1, contrast)));
+  }
+  return out;
+}
+
+// ─── 命名モードの生成入口 (CVGenerator.generateNamed の移植) ───
+
+/// 命名モード (配置層)。実況の generate 系と独立・既存経路不変。スロットごとに
+/// pickConsonant/pickVowel を呼ぶ (kiki は使わない — スロット軸が既にそのスロットの
+/// ターゲットなので、大域 K 整合ゲートを別途通す必要がない)。
+function namingGenerate(inventory, rand, contrast = 0, temperature = 0.4) {
+  const slots = namingSlots(inventory, contrast);
+
+  const moras = [];
+  let prevOnset = null;
+  for (const slot of slots) {
+    for (let i = 0; i < slot.moraCount; i++) {
+      // excludeNil=true (Swift の allowNilOnset:false 相当): 命名モードは常に子音始まり。
+      const onset = pickConsonant(slot.axes, prevOnset, temperature, rand, null, slot.manner, true, null);
+      // 拗音/半母音 onset は a/u/o の3母音とのみ結合 (generate と同じ制約, Stage 2d)。
+      const needsAUO = onset !== null && (PALATALIZED.has(onset) || SEMIVOWEL.has(onset));
+      const restrict = needsAUO ? new Set(["a", "u", "o"]) : null;
+      const nucleus = pickVowel(slot.axes, null, temperature, restrict, rand, null);
+      moras.push({ onset, nucleus, durationMs: 170 + slot.axes.size * 20,
+                   gapMs: 0, amplitude: 1.0, isN: false, isQ: false });
+      prevOnset = onset;
+    }
+  }
+
+  // 終止の適用 (コーパス検証 §10-1 の確定規則)。
+  // P4: 強い頭 (極性 > 0.3) を contrast >= 0.5 で丸く締める — open は nasal へ昇格
+  // (対照尾 CV + ん = 「ミン」構造)。閉形/流線が自身の終止 (nasal/cut/ー) を持つ場合は
+  // 形の読みを優先し上書きしない。
+  let closure = inventory.closure;
+  if (contrast >= 0.5 && closure === "open"
+      && namingHeadPolarity(slots) > NAMING_CONTRAST_NASAL_UPGRADE_THRESHOLD) {
+    closure = "nasal";
+  }
+  switch (closure) {
+    case "nasal":
+      moras.push(moraicNMora());
+      break;
+    case "cut":
+      // 語末には置かない (実在名51本で促音終止ゼロの実測)。最終モーラの直前に促音 gap を
+      // 挿入し、語は開音節のまま終える — 促音は「語中の弾み」の資源として使う。
+      // 1モーラ語では gap が「語頭促音」になってしまうため適用しない (開音節扱い)。
+      if (moras.length >= 2) {
+        const last = moras.pop();
+        moras.push(gapMora(last));
+      }
+      break;
+    case "open":
+      break;   // 開音節 — 何も足さない
+    case "long": {
+      // 流線の余韻 = 直前母音の保持 (onset なし + 同一 nucleus = 長音延長)。撥音直後は付けない。
+      const prev = moras[moras.length - 1];
+      if (prev && !prev.isN) moras.push(heldVowelMora(prev.nucleus));
+      break;
+    }
+    default:
+      break;   // suffix (P2 では SuffixLexicon 立法待ち・空なので生成されない。安全側で open 同扱い)
+  }
+
+  const f0Raw = 200 * (1 + 0.2 * inventory.axes.bright - 0.2 * inventory.axes.size);
+  const baseF0 = Math.max(80, Math.min(400, f0Raw));
+
+  return { axes: { ...inventory.axes }, moras, baseF0, isRedup: false };
+}
+
+// ─── NG 語フィルタ (常設合意 2026-07-09): 命名経路にも既定配線。実況の生出力方針は不変 ───
+// LexicalFilter.swift の ngWords をそのまま (カタカナ・部分一致)。
+const NAMING_NG_WORDS = [
+  // 性的
+  "チンチン", "チンコ", "チンポ", "マンコ", "マンマン",
+  "パイパイ", "オッパイ", "チクビ", "キンタマ", "ボッキ",
+  "ペニス", "クンニ", "フェラ", "オナニ", "セックス", "エロ",
+  // スカトロ
+  "ウンコ", "ウンチ", "シッコ", "クソ", "ゲロ", "ゲリ",
+  // 暴言
+  "シネ", "コロス",
+];
+// 長音を除いたひらがな→カタカナ正規形 (ぁ〜ん を +0x60)。照合前に語とパターン双方から
+// 長音「ー」を除去する (チーンチン等の変形を拾う。促音ッは除去しない)。
+function namingNormalizeForNG(s) {
+  let out = "";
+  for (const ch of s) {
+    const code = ch.codePointAt(0);
+    out += (code >= 0x3041 && code <= 0x3093) ? String.fromCodePoint(code + 0x60) : ch;
+  }
+  return out.replace(/ー/g, "");
+}
+const NAMING_NG_NORMALIZED = NAMING_NG_WORDS.map(namingNormalizeForNG);
+/// かな文字列 (namingKanaOf の出力等) が NG 語を含まないか。
+function namingIsClean(kana) {
+  const n = namingNormalizeForNG(kana);
+  for (const ng of NAMING_NG_NORMALIZED) if (n.includes(ng)) return false;
+  return true;
+}
+
+// mora列 → ひらがな (KanaTable.swift/kanaMarks の移植)。web の通常表示は romajiOf を使う
+// ため (この web 版に既存のかな変換が無い)、NG フィルタの内部判定専用として追加する —
+// UI 表示・再生経路には一切影響しない。
+const NAMING_KANA_ROWS = {
+  "":   ["あ", "い", "う", "え", "お"],
+  k:  ["か", "き", "く", "け", "こ"],
+  g:  ["が", "ぎ", "ぐ", "げ", "ご"],
+  s:  ["さ", "し", "す", "せ", "そ"],
+  z:  ["ざ", "じ", "ず", "ぜ", "ぞ"],
+  t:  ["た", "ち", "つ", "て", "と"],
+  d:  ["だ", "でぃ", "どぅ", "で", "ど"],
+  n:  ["な", "に", "ぬ", "ね", "の"],
+  h:  ["は", "ひ", "ふ", "へ", "ほ"],
+  b:  ["ば", "び", "ぶ", "べ", "ぼ"],
+  p:  ["ぱ", "ぴ", "ぷ", "ぺ", "ぽ"],
+  m:  ["ま", "み", "む", "め", "も"],
+  r:  ["ら", "り", "る", "れ", "ろ"],
+  w:  ["わ", "うぃ", "う", "うぇ", "を"],
+  y:  ["や", "い", "ゆ", "え", "よ"],
+  f:  ["ふぁ", "ふぃ", "ふ", "ふぇ", "ふぉ"],
+  sh: ["しゃ", "し", "しゅ", "しぇ", "しょ"],
+  ts: ["つぁ", "つぃ", "つ", "つぇ", "つぉ"],
+  ch: ["ちゃ", "ち", "ちゅ", "ちぇ", "ちょ"],
+  j:  ["じゃ", "じ", "じゅ", "じぇ", "じょ"],
+  ky: ["きゃ", "き", "きゅ", "きぇ", "きょ"],
+  gy: ["ぎゃ", "ぎ", "ぎゅ", "ぎぇ", "ぎょ"],
+  ny: ["にゃ", "に", "にゅ", "にぇ", "にょ"],
+};
+const NAMING_VOWEL_INDEX = { a: 0, i: 1, u: 2, e: 3, o: 4 };
+function namingKanaOf(moras) {
+  let out = "", prevVowel = null;
+  for (const m of moras) {
+    if (m.isN) { out += "ん"; prevVowel = null; continue; }
+    if (m.isQ) { out += "っ"; prevVowel = null; continue; }
+    if (m.onset === null && prevVowel !== null && prevVowel === m.nucleus) {
+      out += "ー";   // 長音符 (直前母音を伸ばす)。prevVowel は据え置き。
+    } else {
+      const row = NAMING_KANA_ROWS[m.onset ?? ""] ?? NAMING_KANA_ROWS[""];
+      let base = row[NAMING_VOWEL_INDEX[m.nucleus] ?? 0];
+      if (m.gapMs > 0) base = "っ" + base;
+      out += base;
+      prevVowel = m.nucleus;
+    }
+  }
+  return out;
+}
+
+/// NG を避ける決定的な生成。NG 語に当たったら seed を固定ステップでずらして再生成
+/// (最大 maxAttempts 回)。同じ入力 → 常に同じクリーンな語 (LexicalFilter.generateClean /
+/// CVGenerator.generateNamedClean と同じ定型: 決定的リロール・全滅時は最後の候補)。
+function namingGenerateClean(inventory, seed, contrast = 0, maxAttempts = 8, temperature = 0.4) {
+  let last = null;
+  const attempts = Math.max(maxAttempts, 1);
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const rand = mulberry32((seed + attempt * 0x9e3779b9) >>> 0);
+    const event = namingGenerate(inventory, rand, contrast, temperature);
+    if (namingIsClean(namingKanaOf(event.moras))) return event;
+    last = event;
+  }
+  return last;
 }
 
 // ─── P11 記号語彙 (2026-07-15): ⊃⊂∩∪ (開いた弧) → 母音+ん / ＜＞∧∨ (開いた一角) → 子音+ん ───
@@ -3589,7 +3955,15 @@ canvas.addEventListener("pointerup", ev => {
     // #4 乱雑度: 閾値 0.4 以上のときだけ生成へ注入 (規則的な描線は null = 従来と厳密互換)。
     // 8類型の実測分離: なぐり書き ≥0.84 / 規則形 (ジグザグ・ハッチング・星・波) ≤0.17。
     const disorder = cx.disorder >= 0.4 ? cx.disorder : null;
-    if (vocabWord) {
+    // 命名モード (配置層, dev only): トグル ON のときはモードスイッチとして全ての経路
+    // (記号語彙/単位語/実況 generate) を上書きする。OFF (既定) ではこの分岐は素通り —
+    // 以降の従来経路 (vocabWord/unitEligible/generateAndPlay) はバイト単位で不変。
+    if (namingModeOn()) {
+      const contrast = Number(document.getElementById("naming-contrast").value || 0);
+      const inv = namingDecompose(ax, cx);
+      const event = namingGenerateClean(inv, axesSeed(ax, 0), contrast);
+      playAndRemember(event, ax, true, "naming", extra);
+    } else if (vocabWord) {
       const ev2 = vocabEvent(vocabWord, ax);
       ev2.vocabReason = vocabReason;
       playAndRemember(ev2, ax, true, "draw", extra);
@@ -3652,6 +4026,14 @@ try {
 } catch (e) {}
 document.getElementById("kn-hc").addEventListener("input", e => {
   document.getElementById("val-hc").textContent = Number(e.target.value).toFixed(2);
+});
+// 命名モード dev トグル/対照スライダー (DOM 参照のため純関数ブロックの外に置く)。
+function namingModeOn() {
+  const el = document.getElementById("naming-toggle");
+  return !!(el && el.checked);
+}
+document.getElementById("naming-contrast").addEventListener("input", e => {
+  document.getElementById("val-naming-contrast").textContent = Number(e.target.value).toFixed(2);
 });
 
 // プリセット chips
