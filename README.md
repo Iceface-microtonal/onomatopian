@@ -1,6 +1,6 @@
 # Onomatoi  /  おのまとい — Web (self-contained)
 
-**▶ Play: https://iceface-microtonal.github.io/onomatopian/**
+**▶ Play: https://iceface-microtonal.github.io/onomatoi/**
 
 Phonosymbolic Topology Synthesizer の簡易 Web 版。このフォルダ単体で完結する
 (本体 OnomatoiCore からの移植。音程変化なし / WARABE なし / COMPOSE なし)。
