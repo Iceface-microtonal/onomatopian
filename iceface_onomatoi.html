@@ -1949,10 +1949,14 @@ function openChevronSignal(cx) {
 // 2周なぞり/連ループ/渦 ≥ 3.5 → 閾値 3.2。rotationFraction の**上限は使えない** —
 // 閉ストロークは継ぎ目の巻き込みで 1.05周が 1.6〜1.9 に過大測定される (合成円で実測) ため、
 // 一周+ペン尾と真の2周を回転量では分離できない。
+// 2026-07-21 コウさん立法 (第2信・P12追補): 円はサイズ3段階 oon/aoon/aaaan になったため、
+// 旧「大きく開いた円のみ (ax.open >= 0.5)」ゲートを撤去 — 小円も円として完成していれば
+// 語彙が立つ (小円=oon。「う」=すぼめの口の法は、円判定に満たない形に自然に残る)。
+// |round| <= 0.25 は楕円 (え, P9e) の除外として維持。
 function circleVocabSignal(cx, ax) {
   return cx.isClosed && cx.corners === 0 && cx.rotationFraction > 0.8
     && cx.pathRatio / Math.max(1e-6, cx.sizeRatio) < 3.2
-    && Math.abs(ax.round) <= 0.25 && ax.open >= 0.5;
+    && Math.abs(ax.round) <= 0.25;
 }
 
 // ─── P12 開いた弧の語彙 (2026-07-16 コウさん立法): 向き×大きさ → 固定語 ───
@@ -1968,7 +1972,12 @@ const ARC_VOCAB = {
   up:    ["nyu", "nyuu", "nyuuu"],   // ∩ 膨らみ上: 下から持ち上がる・芽生え
   down:  ["moo", "mooo", "moooo"],   // ∪ 膨らみ下: 下に音が籠る・重力・包み込む
 };
-const CIRCLE_VOCAB = "aaan";         // 完全な円: 収束の ん が初めて立つ (大きさ段階は未立法)
+// 2026-07-21 コウさん立法 (第2信): 円もサイズ3段階 (小/中/大 = arcSizeClass 流用)。
+// 正本 = Onomatoi/docs/FEEDBACK_2026-07-21_kou_circle_sizes.md。
+// 小 oon = まとまり (o は音が広がらない)・中 aoon = 広がり→まとまり・大 aaaan = 完全に
+// 内部空間を開く。**「o の次に a は来ない」** (a→o 可・o→a 不可 = 広がりが先、まとまりが後、
+// 完成の ん が最後という不可逆な時間構造)。旧 "aaan" 固定 (2026-07-16〜) を上書き。
+const CIRCLE_VOCAB = ["oon", "aoon", "aaaan"];   // [小, 中, 大]
 const TRIANGLE_VOCAB = "gyagyoon";   // P13 閉じた三角形 (2026-07-21 コウさん立法)
 
 // ─── P13 三角形 = gyagyoon (2026-07-21 コウさん立法) ───
@@ -3969,10 +3978,13 @@ canvas.addEventListener("pointerup", ev => {
         ? `開いた弧 ${dirJa}・${sizeJa} → ${vocabWord}（鼻音=柔らかさ・ん は円が完成するまで付かない）`
         : `open arc (${dir}, size ${sizeClass}) → ${vocabWord} (nasal = softness; no final N until the circle closes)`;
     } else if (circleVocabSignal(cx, ax)) {
-      vocabWord = CIRCLE_VOCAB;
+      // 2026-07-21 立法: 円もサイズ3段階 (小=まとまり oon / 中=広がり→まとまり aoon / 大=全開 aaaan)。
+      const circleSize = arcSizeClass(inkPts, rect.width, rect.height);
+      vocabWord = CIRCLE_VOCAB[circleSize];
+      const csJa = ["小さな丸=まとまり", "中の丸=広がりと時間", "大きな丸=内部空間を完全に開く"][circleSize];
       vocabReason = uiLang === "ja"
-        ? `完全な円 → ${CIRCLE_VOCAB}（円が完成して初めて 収束の ん が立つ）`
-        : `completed circle → ${CIRCLE_VOCAB} (the closing N appears only when the circle completes)`;
+        ? `完全な円 (${["小", "中", "大"][circleSize]}) → ${vocabWord}（${csJa}・ん で空間を完成）`
+        : `completed circle (size ${circleSize}) → ${vocabWord} (o = gathering, a = opening; the final N completes the space)`;
     } else if (triangleVocabSignal(cx)) {
       // P13 (2026-07-21 コウさん立法): 閉じた三角形 → gyagyoon。
       vocabWord = TRIANGLE_VOCAB;

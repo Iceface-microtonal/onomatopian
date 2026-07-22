@@ -173,10 +173,12 @@ console.log("── circle (aaan) ゲート: 一周の閉円のみ ──");
   check("連ループ2+尾 (jitter) → false", !judge(jittered(chain)).circle);
 }
 {
-  // 小さく閉じた丸 (う の領域・open < 0.5) は従来どおり aaan にしない
+  // 2026-07-21 コウさん立法 (第2信・円サイズ3段): 小円も円として完成していれば語彙が立つ
+  // (小=oon)。旧「open<0.5 は う の領域」ゲートは撤去 — う は円判定に満たない形に残る。
+  // 正本 = Onomatoi/docs/FEEDBACK_2026-07-21_kou_circle_sizes.md
   const small = arc(180, 180, 30, 1.0);
   const j = judge(small);
-  check("小円 → aaan ゲート false (う の領域)", !j.circle,
+  check("小円 → circle ゲート true (2026-07-21 サイズ立法: 小=oon)", j.circle,
         JSON.stringify({ open: j.ax.open }));
 }
 

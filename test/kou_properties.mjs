@@ -216,8 +216,10 @@ const endsWithN = ev => ev.moras.length > 0 && ev.moras[ev.moras.length - 1].isN
 const PROPERTIES = {
   // ── 2026-07-21 ラウンド (P13 三角立法・正本 = docs/FEEDBACK_2026-07-21_kou_triangle_vocab.md) ──
   "mrus5hvn-1": {  // 円 → aaan 👍 = P12 円則の初の実地承認
-    desc: "P12 円=aaan が保たれる (記録描線の語彙判定・初の実地承認)",
-    check: () => p12VocabWord(p13FixtureStroke("mrus5hvn-1")) === "aaan",
+    // 2026-07-21 第2信 (サイズ3段立法) により、この円 (bbox対角比≈0.59=大クラス) の語形は
+    // aaan → aaaan へ立法更新。👍の意味 (円が完成して ん が立つ) は保存され、語形のみ変化。
+    desc: "円則が保たれる (当時 aaan 承認 → サイズ立法後は大円=aaaan)",
+    check: () => p12VocabWord(p13FixtureStroke("mrus5hvn-1")) === "aaaan",
   },
   "mrus6t5v-1": {  // 三角 → gyadoon 👎 → P13 立法 gyagyoon
     // stroke は旧 export の末尾切り捨てで閉じが損失 → 記録済み cor/cs の pinned 判定
@@ -436,9 +438,12 @@ function p12VocabWord(pts) {
     const sc = api.arcSizeClass(inkPts, W, H);
     return api.romajiOf(api.vocabEvent(api.ARC_VOCAB[dir][sc], ax));
   }
+  // 2026-07-21 立法: 円はサイズ3段階 (open>=0.5 ゲート撤去・HTML circleVocabSignal と厳密ミラー)。
   if (cx.isClosed && cx.corners === 0 && cx.rotationFraction > 0.8
-      && Math.abs(ax.round) <= 0.25 && ax.open >= 0.5) {
-    return api.romajiOf(api.vocabEvent(api.CIRCLE_VOCAB, ax));
+      && cx.pathRatio / Math.max(1e-6, cx.sizeRatio) < 3.2
+      && Math.abs(ax.round) <= 0.25) {
+    const sc = api.arcSizeClass(inkPts, W, H);
+    return api.romajiOf(api.vocabEvent(api.CIRCLE_VOCAB[sc], ax));
   }
   // P13 (2026-07-21 コウさん立法): 閉じた三角形 → gyagyoon。
   if (api.triangleVocabSignal(cx)) {
@@ -537,8 +542,20 @@ const P11_CHECKS = [
   ...Object.entries(P12_EXPECT).map(([dir, words]) =>
     [`⊃⊂∩∪ ${dir}: 大きさ 3 段で ${words.join("/")} (コウさん語彙)`,
       () => P12_RADII.every((r, i) => p12VocabWord(bulgeArcPts(dir, r)) === words[i])]),
-  ["完全な円 (大/中): aaan (収束の ん が立つ)",
-    () => p12VocabWord(circlePts2(140)) === "aaan" && p12VocabWord(circlePts2(80)) === "aaan"],
+  ["円サイズ3段 (2026-07-21 立法): 大=aaaan / 中=aoon / 小=oon",
+    () => p12VocabWord(circlePts2(140)) === "aaaan" && p12VocabWord(circlePts2(90)) === "aoon"
+       && p12VocabWord(circlePts2(40)) === "oon"],
+  ["円の vocabEvent 分解: oon=[o,ー,ん] / aoon=[a,o,ー,ん] (o の次に a は来ない構造)",
+    () => {
+      const ax0 = { size: 0, sharp: 0, tex: 0, bright: 0, round: 0, open: 0 };
+      const o = api.vocabEvent("oon", ax0).moras;
+      const ao = api.vocabEvent("aoon", ax0).moras;
+      const a4 = api.vocabEvent("aaaan", ax0).moras;
+      return o.length === 3 && o[0].onset === null && o[0].nucleus === "o" && !o[1].isN && o[2].isN
+        && ao.length === 4 && ao[0].nucleus === "a" && ao[1].nucleus === "o" && ao[1].onset === null
+        && !ao[2].isN && ao[2].nucleus === "o" && ao[3].isN
+        && a4.length === 5 && a4[0].nucleus === "a" && a4[4].isN;
+    }],
   // fixture の stroke は旧 export の slice(0,48) 末尾切り捨てで「閉じ」の珠が失われており
   // (実測: 再生 isClosed=false/cor=2 vs 記録 cor=3)、stroke 再生では閉合が復元できない。
   // 記録済み導出値 (cor=3, cs=0.453・cor=3 は v18 の閉形正準化を経た値=閉) を pinned 判定に使う。
@@ -578,8 +595,8 @@ const P11_CHECKS = [
         && mo.length === 2 && mo[0].onset === "m" && mo[0].nucleus === "o"
         && mo[1].onset === null && mo[1].nucleus === "o" && !mo[1].isN;
     }],
-  ["小さく閉じた丸: 語彙にならない (う=すぼめの既存法を保つ)",
-    () => p12VocabWord(circlePts2(40)) === null],
+  // 2026-07-21 立法更新: 小円も円として完成していれば oon (旧: 語彙にならず「う」の口の法)。
+  // 「う」は円判定に満たない形 (潰れ/開き/極小) に残る — 境界はコウさん次ラウンドで確認。
   ["斜め楕円: 語彙にならない (え=P9e の既存法を保つ)",
     () => p12VocabWord(tiltedEllipsePts(-30)) === null],
   ["開いた一角 (2種) は全て openChevron 判定になる",
@@ -638,7 +655,7 @@ const P11_CHECKS = [
     }],
 ];
 let p11Fail = 0;
-console.log("\nP11/P12/P13 記号語彙サニティ (⊃⊂∩∪=コウさん語彙・円=aaan・三角=gyagyoon・＜＞∧∨=子音+ん・既存形は誤爆しない):");
+console.log("\nP11/P12/P13 記号語彙サニティ (⊃⊂∩∪=コウさん語彙・円=サイズ3段 oon/aoon/aaaan・三角=gyagyoon・＜＞∧∨=子音+ん・既存形は誤爆しない):");
 for (const [label, fn] of P11_CHECKS) {
   let ok = false;
   try { ok = fn(); } catch { ok = false; }
