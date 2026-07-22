@@ -1969,6 +1969,22 @@ const ARC_VOCAB = {
   down:  ["moo", "mooo", "moooo"],   // ∪ 膨らみ下: 下に音が籠る・重力・包み込む
 };
 const CIRCLE_VOCAB = "aaan";         // 完全な円: 収束の ん が初めて立つ (大きさ段階は未立法)
+const TRIANGLE_VOCAB = "gyagyoon";   // P13 閉じた三角形 (2026-07-21 コウさん立法)
+
+// ─── P13 三角形 = gyagyoon (2026-07-21 コウさん立法) ───
+// 正本 = Onomatoi/docs/FEEDBACK_2026-07-21_kou_triangle_vocab.md。fixture = mrus6t5v-1。
+// ぎゃ = 凝縮した力の爆発 (「描画の最初に来ることによって」= 語頭位置の意味論)・
+// ぎょ = 鋭角の鋭さを残した響きの広がり・おー = 空間・ん = 三角という空間の完成
+// (P12 原理2「ん=完成の印・閉形にのみ立つ」と整合)。拗音 = 緊張を与えない。
+// 「角が60〜90度」は知覚的記述と解釈 — 内角和180度なので全角60-90度を満たすのは
+// 正三角形のみで、fixture 実描線も頂角≈48度を含む。実装は平均転回角ベースの
+// cornerSharpness 帯 (fixture cs=0.453・手描き正三角 ≈0.50-0.55 を包含)。
+// 注意: 凸多角形の外角和 2π 不変量により平均 cs では針三角 (<60度) を正三角と
+// 分離できない — 針を別語にするかはコウさん確認事項 (v1 は帯内の全閉三角に適用)。
+function triangleVocabSignal(cx) {
+  return cx.isClosed && cx.corners === 3
+    && cx.cornerSharpness >= 0.30 && cx.cornerSharpness <= 0.65;
+}
 
 /// 弧の膨らみの向き: 弦 (始点→終点) から最も遠い点 (弧の頂) が、弦の中点から見て
 /// どちらに膨らんでいるか。up = 画面上方向 (∩)。
@@ -1999,15 +2015,30 @@ function arcSizeClass(points, w, h) {
   return ratio < 0.30 ? 0 : ratio < 0.55 ? 1 : 2;
 }
 
-/// 固定語彙語 → イベント。"myiii" = [myi, ー, ー] / "aaan" = [a, ー, ー, ん]。
-/// 生成エンジン (pickConsonant/pickVowel/legalize) は通さない決定的な語。
+/// 固定語彙語 → イベント。"myiii" = [myi, ー, ー] / "aaan" = [a, ー, ー, ん] /
+/// "gyagyoon" = [gya, gyo, ー, ん]。生成エンジン (pickConsonant/pickVowel/legalize) は
+/// 通さない決定的な語。
+/// P13 (2026-07-21) で逐次 CV パースへ書き換え: 旧正規表現は 単一CV+長音+ん のみで
+/// gyagyoon (複数 CV 語) を分解できなかった。規則 = 子音列+母音 を繰り返し読み、
+/// onset なしで直前と同母音なら保持拍 (ー)、末尾に残った n は撥音。
+/// 旧語彙 (my系/aaan/moo系) は旧実装と厳密に同じモーラ列になる (後方互換・性質テストで固定)。
 function vocabEvent(word, axes) {
-  const m = word.match(/^([a-z]*?)([aiueo])([aiueo]*)(n?)$/);
-  const onset = m[1] || null;
-  const moras = [{ onset, nucleus: m[2], durationMs: 170 + axes.size * 20,
-                   gapMs: 0, amplitude: 1.0, isN: false, isQ: false }];
-  for (const hv of m[3]) moras.push(heldVowelMora(hv));
-  if (m[4] === "n") moras.push(moraicNMora());
+  const moras = [];
+  let rest = word, prevV = null;
+  while (rest.length > 0) {
+    if (rest === "n") { moras.push(moraicNMora()); break; }
+    const m = rest.match(/^([^aiueo]*)([aiueo])/);
+    if (!m) break;   // 語彙定数は自前なので到達しない (保険)
+    const onset = m[1] || null;
+    if (!onset && m[2] === prevV && moras.length > 0) {
+      moras.push(heldVowelMora(m[2]));
+    } else {
+      moras.push({ onset, nucleus: m[2], durationMs: 170 + axes.size * 20,
+                   gapMs: 0, amplitude: 1.0, isN: false, isQ: false });
+    }
+    prevV = m[2];
+    rest = rest.slice(m[0].length);
+  }
   const f0 = Math.max(80, Math.min(400, 200 * (1 + 0.2 * axes.bright - 0.2 * axes.size)));
   return { axes: { ...axes }, moras, baseF0: f0, isRedup: false };
 }
@@ -3341,7 +3372,9 @@ function syncReasonToVote() {
   if (!reasonEl || !currentUtterance) return;
   const idx = feedbackLog.findIndex(r => r.id === currentUtterance.id);
   if (idx < 0) return;   // まだ投票していない → vote() が拾う
-  const text = reasonEl.value.trim().slice(0, 200);
+  // 2026-07-21: 500 へ (vote() 側は 07-15 に拡大済みだったが、この後書き経路だけ 200 が残り
+  // コウさんの P13 立法理由が切断された — 上限は必ず vote() と同値に保つこと)。
+  const text = reasonEl.value.trim().slice(0, 500);
   if (feedbackLog[idx].reason === text) return;
   feedbackLog[idx].reason = text;
   saveFeedback();
@@ -3940,6 +3973,12 @@ canvas.addEventListener("pointerup", ev => {
       vocabReason = uiLang === "ja"
         ? `完全な円 → ${CIRCLE_VOCAB}（円が完成して初めて 収束の ん が立つ）`
         : `completed circle → ${CIRCLE_VOCAB} (the closing N appears only when the circle completes)`;
+    } else if (triangleVocabSignal(cx)) {
+      // P13 (2026-07-21 コウさん立法): 閉じた三角形 → gyagyoon。
+      vocabWord = TRIANGLE_VOCAB;
+      vocabReason = uiLang === "ja"
+        ? `三角形 → ${TRIANGLE_VOCAB}（ぎゃ=凝縮した力の爆発・ぎょ=鋭さを残した広がり・おー=空間・ん=三角という空間の完成）`
+        : `triangle → ${TRIANGLE_VOCAB} (gya = concentrated force bursting out; gyo = spread that keeps the edge; oo = space; final N completes the triangular space)`;
     }
     // Step1 確定▲: 判定に使った「形の角」(閉形は正準化後 = 描き始めの頂点も含む) を表示。
     // 実況▲(輪郭線) = 軌跡がその場で曲がった点 / 確定▲(塗り) = 完成形としての角 — 表示と判定を一致させる。
@@ -3948,7 +3987,13 @@ canvas.addEventListener("pointerup", ev => {
     const seg = segmentStroke(inkPts);
     // v4 フィードバック用の発話コンテキスト: 判定に使った導出量 + 描いた珠の頂点列 (正規化・≤48点)。
     const r3 = v => Math.round(v * 1000) / 1000;
-    const beads = (coarse ? stroke : inkPts).slice(0, 48)
+    // ≤48点へ**均一間引き** (端点保持)。旧 slice(0,48) は先頭48点で末尾を切り捨てており、
+    // 長い描線では「閉じ」へ向かう最後の珠が失われて fixture 再生の閉合判定が崩れた
+    // (P13 三角 mrus6t5v-1 で発覚・2026-07-21)。既存 fixture の stroke は損失済みのため、
+    // それらの検証は記録済み導出値 (cor/cs) の pinned 判定を使う (kou_properties.mjs 参照)。
+    const beadsSrc = coarse ? stroke : inkPts;
+    const beads = (beadsSrc.length <= 48 ? beadsSrc
+      : Array.from({ length: 48 }, (_, i) => beadsSrc[Math.round(i * (beadsSrc.length - 1) / 47)]))
       .map(p => [r3(p.x / rect.width), r3(p.y / rect.height)]);
     // shape: なぜ?パネルの計測表示用 (Step1/2/3)。playAndRemember は fb レコードへ
     // 明示フィールドしか写さないので、ここに載せても投票データには入らない。

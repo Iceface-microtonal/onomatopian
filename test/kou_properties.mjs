@@ -104,6 +104,7 @@ const EXPORTS = ["extractAxes", "applyHandCorrection", "bucketedAxes", "densifie
   "unitEligible", "generateFromUnits", "generate", "axesSeed", "mulberry32",
   "wordK", "romajiOf", "openArcSignal", "openChevronSignal",
   "arcBulgeDirection", "arcSizeClass", "vocabEvent", "ARC_VOCAB", "CIRCLE_VOCAB",
+  "triangleVocabSignal", "TRIANGLE_VOCAB",
   "segmentWord"];
 const ctx = vm.createContext({ console });
 vm.runInNewContext(
@@ -213,6 +214,22 @@ const endsWithN = ev => ev.moras.length > 0 && ev.moras[ev.moras.length - 1].isN
 
 // tier は fixture の vote から自動 (+1=regression / -1=target)。
 const PROPERTIES = {
+  // ── 2026-07-21 ラウンド (P13 三角立法・正本 = docs/FEEDBACK_2026-07-21_kou_triangle_vocab.md) ──
+  "mrus5hvn-1": {  // 円 → aaan 👍 = P12 円則の初の実地承認
+    desc: "P12 円=aaan が保たれる (記録描線の語彙判定・初の実地承認)",
+    check: () => p12VocabWord(p13FixtureStroke("mrus5hvn-1")) === "aaan",
+  },
+  "mrus6t5v-1": {  // 三角 → gyadoon 👎 → P13 立法 gyagyoon
+    // stroke は旧 export の末尾切り捨てで閉じが損失 → 記録済み cor/cs の pinned 判定
+    // (cor=3 は v18 閉形正準化済み=閉。P11_CHECKS の同名注記参照)。
+    desc: "P13 閉じた三角 → gyagyoon (ぎゃ=爆発・ぎょ=広がり・おー=空間・ん=完成)",
+    check: () => {
+      const rec = fixture.records.find(x => x.id === "mrus6t5v-1");
+      const ax0 = { size: 0, sharp: 0, tex: 0, bright: 0, round: 0, open: 0 };
+      return !!rec && api.triangleVocabSignal({ isClosed: true, corners: rec.cor, cornerSharpness: rec.cs })
+        && api.romajiOf(api.vocabEvent(api.TRIANGLE_VOCAB, ax0)) === "gyagyoon";
+    },
+  },
   "mrfxxez7-3": {  // 丸 → aaaa 👍
     desc: "onset なし母音 run のまま (全モーラ onset=null)",
     check: ev => ev.moras.every(m => m.onset === null),
@@ -423,6 +440,10 @@ function p12VocabWord(pts) {
       && Math.abs(ax.round) <= 0.25 && ax.open >= 0.5) {
     return api.romajiOf(api.vocabEvent(api.CIRCLE_VOCAB, ax));
   }
+  // P13 (2026-07-21 コウさん立法): 閉じた三角形 → gyagyoon。
+  if (api.triangleVocabSignal(cx)) {
+    return api.romajiOf(api.vocabEvent(api.TRIANGLE_VOCAB, ax));
+  }
   return null;
 }
 /// 一角用: 従来どおり forceConsonantOnset 経路の統計。
@@ -493,12 +514,70 @@ const P12_EXPECT = {
   up: ["nyu", "nyuu", "nyuuu"], down: ["moo", "mooo", "moooo"],
 };
 const P12_RADII = [40, 90, 150];   // 小 / 中 / 大 (360×360 キャンバス)
+// ─── P13 用ヘルパ (2026-07-21 コウさん立法・正本 = docs/FEEDBACK_2026-07-21_kou_triangle_vocab.md) ───
+/// fixture の正規化 stroke ([0,1]) をテストキャンバス座標へ。
+function p13FixtureStroke(id) {
+  const r = fixture.records.find(x => x.id === id);
+  return r ? r.stroke.map(([nx, ny]) => ({ x: nx * W, y: ny * H })) : null;
+}
+/// 頂点列を辺ごとに20分割補間した閉ポリゴン (最後に始点近傍へ戻る = 手描きの閉じ)。
+function closedPolyPts(verts) {
+  const pts = [];
+  for (let e = 0; e < verts.length; e++) {
+    const a = verts[e], b = verts[(e + 1) % verts.length];
+    for (let t = 0; t < 20; t++)
+      pts.push({ x: a[0] + (b[0] - a[0]) * t / 20, y: a[1] + (b[1] - a[1]) * t / 20 });
+  }
+  pts.push({ x: verts[0][0] + 1, y: verts[0][1] + 2 });
+  return pts;
+}
+const p13Triangle = closedPolyPts([[180, 60], [280, 280], [80, 280]]);
+const p13Square = closedPolyPts([[100, 100], [260, 100], [260, 260], [100, 260]]);
 const P11_CHECKS = [
   ...Object.entries(P12_EXPECT).map(([dir, words]) =>
     [`⊃⊂∩∪ ${dir}: 大きさ 3 段で ${words.join("/")} (コウさん語彙)`,
       () => P12_RADII.every((r, i) => p12VocabWord(bulgeArcPts(dir, r)) === words[i])]),
   ["完全な円 (大/中): aaan (収束の ん が立つ)",
     () => p12VocabWord(circlePts2(140)) === "aaan" && p12VocabWord(circlePts2(80)) === "aaan"],
+  // fixture の stroke は旧 export の slice(0,48) 末尾切り捨てで「閉じ」の珠が失われており
+  // (実測: 再生 isClosed=false/cor=2 vs 記録 cor=3)、stroke 再生では閉合が復元できない。
+  // 記録済み導出値 (cor=3, cs=0.453・cor=3 は v18 の閉形正準化を経た値=閉) を pinned 判定に使う。
+  // export 側は均一間引き (端点保持) へ修正済み — 今後の fixture は stroke 再生で検証できる。
+  ["P13 fixture 記録値 (mrus6t5v-1: cor=3, cs=0.453, 閉): 帯内で gyagyoon",
+    () => {
+      const rec = fixture.records.find(x => x.id === "mrus6t5v-1");
+      const ax0 = { size: 0, sharp: 0, tex: 0, bright: 0, round: 0, open: 0 };
+      return !!rec && api.triangleVocabSignal({ isClosed: true, corners: rec.cor, cornerSharpness: rec.cs })
+        && api.romajiOf(api.vocabEvent(api.TRIANGLE_VOCAB, ax0)) === "gyagyoon";
+    }],
+  ["P13 合成正三角形 (閉): gyagyoon",
+    () => p12VocabWord(p13Triangle) === "gyagyoon"],
+  ["P13 正方形 (閉): 語彙にならない (corners=4)",
+    () => p12VocabWord(p13Square) === null],
+  ["P13 vocabEvent 複数CV: gyagyoon = [gya, gyo, ー, ん]",
+    () => {
+      const ax0 = { size: 0, sharp: 0, tex: 0, bright: 0, round: 0, open: 0 };
+      const ms = api.vocabEvent("gyagyoon", ax0).moras;
+      return ms.length === 4
+        && ms[0].onset === "gy" && ms[0].nucleus === "a"
+        && ms[1].onset === "gy" && ms[1].nucleus === "o"
+        && ms[2].onset === null && ms[2].nucleus === "o" && !ms[2].isN
+        && ms[3].isN === true;
+    }],
+  ["P13 vocabEvent 後方互換: aaan/myiii/moo のモーラ列が旧実装と同一",
+    () => {
+      const ax0 = { size: 0, sharp: 0, tex: 0, bright: 0, round: 0, open: 0 };
+      const a = api.vocabEvent("aaan", ax0).moras;
+      const my = api.vocabEvent("myiii", ax0).moras;
+      const mo = api.vocabEvent("moo", ax0).moras;
+      return a.length === 4 && a[0].onset === null && a[0].nucleus === "a"
+        && a[1].onset === null && a[1].nucleus === "a" && a[2].nucleus === "a"
+        && !a[1].isN && !a[2].isN && a[3].isN === true
+        && my.length === 3 && my[0].onset === "my" && my[0].nucleus === "i"
+        && my[1].onset === null && my[1].nucleus === "i" && my[2].nucleus === "i" && !my[2].isN
+        && mo.length === 2 && mo[0].onset === "m" && mo[0].nucleus === "o"
+        && mo[1].onset === null && mo[1].nucleus === "o" && !mo[1].isN;
+    }],
   ["小さく閉じた丸: 語彙にならない (う=すぼめの既存法を保つ)",
     () => p12VocabWord(circlePts2(40)) === null],
   ["斜め楕円: 語彙にならない (え=P9e の既存法を保つ)",
@@ -559,7 +638,7 @@ const P11_CHECKS = [
     }],
 ];
 let p11Fail = 0;
-console.log("\nP11/P12 記号語彙サニティ (⊃⊂∩∪=コウさん語彙・円=aaan・＜＞∧∨=子音+ん・既存形は誤爆しない):");
+console.log("\nP11/P12/P13 記号語彙サニティ (⊃⊂∩∪=コウさん語彙・円=aaan・三角=gyagyoon・＜＞∧∨=子音+ん・既存形は誤爆しない):");
 for (const [label, fn] of P11_CHECKS) {
   let ok = false;
   try { ok = fn(); } catch { ok = false; }
