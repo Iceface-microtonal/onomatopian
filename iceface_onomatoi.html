@@ -116,7 +116,9 @@
 <div class="panel">
   <div class="row">
     <div class="result-word" id="result-word">—</div>
-    <span class="vote">
+    <!-- 2026-07-23 リリーススコープ: 👍👎 は「研究に参加する」オプトイン (下の FEEDBACK パネル)
+         が ON のときだけ表示。display は JS (applyResearch) が制御。 -->
+    <span class="vote" id="vote-ui" style="display:none;">
       <button id="btn-good" disabled title="イメージ通り / Sounds right">👍</button>
       <button id="btn-bad" disabled title="イメージと違う / Sounds wrong">👎</button>
       <input id="fb-reason" maxlength="500" style="font-size:11px; padding:3px 7px;
@@ -138,7 +140,9 @@
 <!-- Tuning -->
 <div class="panel">
   <div class="row">
-    <span class="panel-title">TUNE</span>
+    <!-- 2026-07-23: 公開面はプリセット専用 (スライダーは dev-only) なので既定表記 PRESETS。
+         ?dev=1 でスライダーが戻るときだけ JS が TUNE に戻す。 -->
+    <span class="panel-title" id="t-tune-title">PRESETS</span>
     <span id="status"></span>
     <button id="btn-play" class="primary" style="margin-left:8px;">▶ PLAY</button>
   </div>
@@ -173,8 +177,9 @@
   </div>
 </div>
 
-<!-- Romaji direct input (v11 で外し 2026-07-17 復活 — v13 native レンダラの実聴にも使う) -->
-<div class="panel">
+<!-- Romaji direct input (v11 で外し 2026-07-17 復活 — v13 native レンダラの実聴にも使う)
+     2026-07-23 リリーススコープ: 層2 (デバッグ/計測) なので公開面から退避 — ?dev=1 でのみ表示 -->
+<div class="panel dev-only">
   <div class="row" style="margin-bottom:6px;">
     <span class="panel-title" id="t-romaji-title">ROMAJI 直接入力</span>
     <span class="hint" style="margin-left:auto;" id="t-romaji-hint">空白区切り、または語をそのまま。促音=Q, 撥音=n (例 don), 拗音=kya 等</span>
@@ -186,9 +191,18 @@
   <div class="chips" id="romaji-chips"></div>
 </div>
 
-<!-- Feedback (👍👎 の収集と書き出し) -->
+<!-- Feedback (👍👎 の収集と書き出し)
+     2026-07-23 リリーススコープ: 既定は「研究に参加する」オプトインの1行だけ。
+     ON (localStorage 永続・?dev=1 でも強制 ON) で 👍👎 と COPY/CLEAR が現れる。 -->
 <div class="panel">
   <div class="row">
+    <label style="display:flex; align-items:center; gap:6px; font-size:11px; cursor:pointer;">
+      <input type="checkbox" id="research-toggle" style="accent-color: var(--pink);">
+      <span id="t-research-label" style="font-weight:700;">研究に参加する</span>
+    </label>
+    <span class="hint" id="t-research-hint" style="margin-left:auto; text-align:right;"></span>
+  </div>
+  <div class="row" id="fb-controls" style="display:none; margin-top:6px;">
     <span class="panel-title">FEEDBACK (<span id="fb-count">0</span>)</span>
     <span class="hint" id="t-fb-hint" style="margin-left:auto; text-align:right;"></span>
     <button id="btn-fb-copy">COPY</button>
@@ -278,6 +292,8 @@ const T = uiLang === "ja" ? {
   romajiTitle: "ROMAJI 直接入力",
   romajiHint: "空白区切り、または語をそのまま (bouba も bo u ba も同じ)。促音=Q, 撥音=n (例 don), 拗音=kya 等",
   fbHint: "👍👎 = イメージ通りか記録。COPY で書き出して開発に渡せます",
+  researchLabel: "研究に参加する",
+  researchHint: "ON にすると 👍👎 で「イメージ通りか」を記録できます (端末内のみ・外部送信なし)",
   fbCopied: "COPIED!",
   fbSaved: (n) => `✓ 記録しました（計${n}件）`,
   fbReasonPH: "理由 (任意): どこがイメージ通り/違う?",
@@ -291,6 +307,8 @@ const T = uiLang === "ja" ? {
   romajiTitle: "ROMAJI input",
   romajiHint: "space-separated or as one word (bouba = bo u ba). geminate=Q, moraic nasal=n (e.g. don), kya/gyu etc.",
   fbHint: "👍👎 = did it sound like your shape? COPY exports for tuning",
+  researchLabel: "Join the research",
+  researchHint: "Turn on to rate words with 👍👎 (stored on this device only)",
   fbCopied: "COPIED!",
   fbSaved: (n) => `✓ saved (${n} total)`,
   fbReasonPH: "why? (optional): what matched / didn't",
@@ -307,6 +325,10 @@ function applyLangTexts() {
   if (rt) rt.textContent = T.romajiTitle;
   const rh = document.getElementById("t-romaji-hint");
   if (rh) rh.textContent = T.romajiHint;
+  const rl = document.getElementById("t-research-label");
+  if (rl) rl.textContent = T.researchLabel;
+  const rhh = document.getElementById("t-research-hint");
+  if (rhh) rhh.textContent = T.researchHint;
 }
 
 // ─── 音素 inventory (PhonosymbolicEvent.swift と対応) ───
@@ -4081,8 +4103,35 @@ drawMouthIcon(0, 0);   // 初期表示 (中立の口)
 try {
   if (new URLSearchParams(location.search).get("dev") === "1") {
     document.querySelectorAll(".dev-only").forEach(el => el.classList.remove("dev-only"));
+    // dev では軸スライダーが戻る = パネルはプリセット専用でなくなるので表記も TUNE へ
+    const tt = document.getElementById("t-tune-title");
+    if (tt) tt.textContent = "TUNE";
   }
 } catch (e) {}
+// 研究参加オプトイン (2026-07-23 リリーススコープ): 👍👎 と FEEDBACK 操作列は既定非表示。
+// チェック ON で表示 + localStorage 永続。?dev=1 は開発ラウンド用に強制 ON。
+// 記録済み feedbackLog には触れない (OFF は「見せない」だけ・データは端末内に残る)。
+(function () {
+  const KEY = "onomatoi.research";
+  const toggle = document.getElementById("research-toggle");
+  function applyResearch(on) {
+    const vote = document.getElementById("vote-ui");
+    if (vote) vote.style.display = on ? "" : "none";
+    const ctl = document.getElementById("fb-controls");
+    if (ctl) ctl.style.display = on ? "" : "none";
+  }
+  let on = false;
+  try { on = localStorage.getItem(KEY) === "1"; } catch (e) {}
+  try { if (new URLSearchParams(location.search).get("dev") === "1") on = true; } catch (e) {}
+  if (toggle) {
+    toggle.checked = on;
+    toggle.addEventListener("change", () => {
+      try { localStorage.setItem(KEY, toggle.checked ? "1" : "0"); } catch (e) {}
+      applyResearch(toggle.checked);
+    });
+  }
+  applyResearch(on);
+})();
 document.getElementById("kn-hc").addEventListener("input", e => {
   document.getElementById("val-hc").textContent = Number(e.target.value).toFixed(2);
 });
