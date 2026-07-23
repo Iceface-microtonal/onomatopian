@@ -3930,6 +3930,21 @@ canvas.addEventListener("pointerdown", ev => {
 canvas.addEventListener("pointermove", ev => {
   if (!drawing) return;
   const p = pointerPos(ev);
+  // 2026-07-23 (Icefaceさん報告 mrxb28xr-3): 枠の縁 = 紙の端。setPointerCapture は枠外の
+  // move も配達し続けるため、はみ出した軌跡が「見えないのに判定に読まれて」いた
+  // (表示と判定の一致の違反)。枠外に出た瞬間その場でペンアップ扱い — はみ出し分は
+  // インクにも判定にも入らない。指を戻しても筆は上がったまま (次の一筆は描き直し)。
+  {
+    const rect = canvas.getBoundingClientRect();
+    if (p.x < 0 || p.y < 0 || p.x > rect.width || p.y > rect.height) {
+      try {
+        canvas.dispatchEvent(new PointerEvent("pointerup", {
+          clientX: ev.clientX, clientY: ev.clientY, pointerId: ev.pointerId }));
+      } catch (e) { drawing = false; }   // 構築不能な古い環境では筆を捨てるだけ
+      ev.preventDefault();
+      return;
+    }
+  }
   if (coarseInkOn() && stroke.length > 0) {
     // 粗い筆: 最後の頂点から step 以上動いたときだけ頂点を確定 (ステップ未満は未確定の糸)。
     const rect = canvas.getBoundingClientRect();
