@@ -3079,7 +3079,18 @@ function buildNativeVoiceBank(sr) {
   }
   for (const v of VOWELS) {
     // native 同様: 長い持続テイク (v_aaaa 等) があれば母音サンプルとして優先
-    const arr = nvChan("v_" + v + v + v + v) || nvChan("v_" + v);
+    const sustainKey = "v_" + v + v + v + v;
+    const sustainArr = nvChan(sustainKey);
+    let arr = sustainArr || nvChan("v_" + v);
+    // 個別サンプルの録音レベル差の是正 (2026-07-24 Icefaceさん実聴報告): v_uuuu (長い
+    // 持続テイク) が他の母音より大きく聴こえた → -3dB。この1本の録音だけの補正
+    // (短い v_u や他母音の持続テイクは無変換・native (Swift ConsonantSampleBank.
+    // knownSampleGainDb) と同じ表)。sustainArr が実際に使われたときだけ適用する
+    // (短い v_u へのフォールバック時は触らない)。
+    if (arr === sustainArr && sustainKey === "v_uuuu") {
+      const gain = Math.pow(10, -3.0 / 20);
+      arr = Float32Array.from(arr, x => x * gain);
+    }
     if (arr) bank.v.set(v, nvTrimTrailingSilence(arr, 0.004, Math.round(sr * 0.01)));
     const nn = nvChan("v_" + v + "_nn");
     if (nn) bank.contN.set(v, nn);   // ベイク済み → そのまま (native の prepared 相当)
