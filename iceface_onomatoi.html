@@ -6,16 +6,25 @@
 <title>Onomatoi / おのまとい</title>
 <style>
   :root {
-    --pink: #e8488a;
-    --pink-bg: rgba(232, 72, 138, 0.10);
-    --pink-bg2: rgba(232, 72, 138, 0.18);
+    /* PuppeTwin — 基本5色 (ロール→パーツの正本 = §11 / アプリ内「配役ルール」)。
+       2026-07-25 Icefaceさん指定で旧配色 (--pink #e8488a 系) から移行。 */
+    --base:   #fafaf7;   /* 筐体・背景。パネル/文字/罫線は base 明度から導出 (~70%) */
+    --accent: #f27fa5;   /* 主操作: ノブ指針・アクティブ鍵・ON状態・主ボタン (~25%) */
+    --sub:    #98c0e4;   /* 副操作: スライダーつまみ・トグル・タグ (~5%) */
+    --extra:  #1a1a1a;   /* 差し色: LED・メーターホット・SEQ点灯 */
+    --accent-ink:      #2b2b30;   /* ACCENT地の文字色。小さいボタン/バッジ向け (閾値165) */
+    --accent-ink-bold: #ffffff;   /* ACCENT地の文字色。大面積・太字の帯向け (閾値175) */
+    /* 旧名の互換エイリアス (既存セレクタは書き換えず、参照先だけ新配色へ差し替え) */
+    --pink: var(--accent);
+    --pink-bg: rgba(242, 127, 165, 0.10);
+    --pink-bg2: rgba(242, 127, 165, 0.18);
     --gray: #888;
     --border: rgba(0,0,0,0.10);
   }
   * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
   body {
     font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
-    background: #fff; color: #111;
+    background: var(--base); color: #111;
     padding: 10px; max-width: 900px; margin: 0 auto;
   }
   header { display: flex; align-items: baseline; gap: 8px; padding: 6px 2px 10px; }
@@ -71,9 +80,9 @@
     font-size: 17px; background: none; padding: 4px 7px; opacity: 0.45;
     border-radius: 6px;
   }
-  .vote button.sel { opacity: 1; background: var(--pink-bg2); box-shadow: 0 0 0 2px var(--pink); transform: scale(1.12); }
+  .vote button.sel { opacity: 1; background: rgba(152, 192, 228, 0.28); box-shadow: 0 0 0 2px var(--sub); transform: scale(1.12); }
   .vote button:disabled { opacity: 0.15; cursor: default; box-shadow: none; transform: none; }
-  #vote-msg { font-size: 11px; font-weight: 700; color: #1899c2; opacity: 0;
+  #vote-msg { font-size: 11px; font-weight: 700; color: var(--accent-ink); opacity: 0;
               transition: opacity 0.25s; white-space: nowrap; margin-left: 2px; }
   #vote-msg.show { opacity: 1; }
   #loading-note.start-ready {
@@ -95,7 +104,7 @@
   <a id="about-link" href="./about_onomatoi.html" style="
     font-size: 10px; font-weight: 700; text-decoration: none;
     border-radius: 4px; padding: 5px 9px;
-    background: rgba(77, 191, 242, 0.13); color: #1899c2;">？ <span id="t-about">解説</span></a>
+    background: rgba(152, 192, 228, 0.20); color: var(--accent-ink);">？ <span id="t-about">解説</span></a>
   <span class="sub">Onomatoi — Phonosymbolic Topology Synthesizer (web)</span>
 </header>
 
@@ -3392,7 +3401,7 @@ function renderFbTags() {
     b.textContent = uiLang === "ja" ? ja : en;
     b.classList.toggle("sel", activeFbTags.has(key));
     b.style.cssText = activeFbTags.has(key)
-      ? "background:var(--pink); color:#fff; border-color:var(--pink);" : "";
+      ? "background:var(--sub); color:var(--accent-ink); border-color:var(--sub);" : "";
     b.addEventListener("click", () => {
       if (activeFbTags.has(key)) activeFbTags.delete(key); else activeFbTags.add(key);
       renderFbTags();
@@ -3627,9 +3636,9 @@ function strokeMouth(c, w, h, open, round, lineWidth, fillAlpha) {
   c.beginPath();
   c.ellipse(w / 2, h / 2, mw / 2, mh / 2, 0, 0, 2 * Math.PI);
   if (fillAlpha > 0 && mh > h * 0.18) {
-    c.fillStyle = `rgba(232,93,161,${fillAlpha})`; c.fill();
+    c.fillStyle = `rgba(242,127,165,${fillAlpha})`; c.fill();
   }
-  c.strokeStyle = "#e85da1";
+  c.strokeStyle = "#f27fa5";
   c.lineWidth = lineWidth;
   c.stroke();
 }
@@ -3701,7 +3710,7 @@ function renderMouthTimeline(ctx, cells) {
                   active ? 2.4 : 1.7, active ? 0.30 : 0);
       it.cv.style.transform = active ? "scale(1.28)" : "scale(1)";
       it.wrap.style.opacity = active ? "1.0" : (state === "spoken" ? "0.85" : "0.35");
-      it.lb.style.color = active ? "#e85da1" : "#999";
+      it.lb.style.color = active ? "#f27fa5" : "#999";
     }
     if (now >= totalEnd + 0.3 && !anyPending) {
       clearInterval(mouthTimelineTimer);   // 停止 = 最終状態 (全部 spoken 0.85) が残る
@@ -3822,7 +3831,7 @@ function redraw() {
   // プリセット見本の形 (薄ピンク)
   if (presetShapePts && presetShapePts.length > 1) {
     cctx.beginPath();
-    cctx.strokeStyle = "rgba(232,72,138,0.30)";
+    cctx.strokeStyle = "rgba(242,127,165,0.30)";
     cctx.lineWidth = 2;
     presetShapePts.forEach((p, i) => {
       const x = p.x * rect.width, y = p.y * rect.height;
@@ -3857,7 +3866,7 @@ function redraw() {
         const dx = v1x / l1 - v2x / l2, dy = v1y / l1 - v2y / l2;
         const dl = Math.hypot(dx, dy);
         drawCornerTri(cctx, b, dl > 1e-6 ? dx / dl : NaN, dl > 1e-6 ? dy / dl : NaN,
-                      { gap: 4, h: 9, hw: 4.2, stroke: "rgba(232,93,161,0.9)", lineWidth: 2.2 });
+                      { gap: 4, h: 9, hw: 4.2, stroke: "rgba(242,127,165,0.9)", lineWidth: 2.2 });
       }
     }
     if (pendingPt && stroke.length > 0) {
@@ -3886,7 +3895,7 @@ function redraw() {
   // 「丸み」と誤読される。▲は角の外向き二等分線の外側から角を指す (apex=角のすぐ外)。
   for (const p of confirmedCorners) {
     drawCornerTri(cctx, p, p.dx, p.dy,
-                  { gap: 5, h: 12, hw: 5.5, fill: "rgba(232,72,138,0.95)" });
+                  { gap: 5, h: 12, hw: 5.5, fill: "rgba(242,127,165,0.95)" });
   }
 }
 // 角マーカー▲: apex が角の gap px 外にあり、外向き二等分線 (dx,dy) に沿って角を指す。
@@ -4399,7 +4408,7 @@ function startApp() {
     if (!note) return;
     note.onclick = null;
     // 開始後は声のクレジット表示 (元の控えめな見た目に戻す)
-    Object.assign(note.style, { background: "rgba(77, 191, 242, 0.13)", color: "#1899c2",
+    Object.assign(note.style, { background: "rgba(152, 192, 228, 0.20)", color: "#2b2b30",
       cursor: "default", textAlign: "left", fontWeight: "normal", fontSize: "11px", padding: "6px 10px" });
     note.textContent = T.voice;
   };
