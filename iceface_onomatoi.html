@@ -3086,7 +3086,7 @@ function buildNativeVoiceBank(sr) {
     // テイクのうち v_uuuu (duuuu) と v_iiii (mii の単独 i) が他より大きく聴こえた → 各-3dB。
     // ファイル狙い撃ちの表 (native = Swift ConsonantSampleBank.knownSampleGainDb と対)。
     // sustainArr が実際に使われたときだけ適用 (短い v_u/v_i へのフォールバック時は無変換)。
-    const NV_SAMPLE_GAIN_DB = { v_uuuu: -3.0, v_iiii: -5.0 };
+    const NV_SAMPLE_GAIN_DB = { v_uuuu: -3.0, v_iiii: -5.0, v_eeee: -3.0 };
     const gdb = NV_SAMPLE_GAIN_DB[sustainKey];
     if (arr && arr === sustainArr && gdb != null) {
       const gain = Math.pow(10, gdb / 20);
