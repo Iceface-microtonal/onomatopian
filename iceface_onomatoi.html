@@ -3082,13 +3082,14 @@ function buildNativeVoiceBank(sr) {
     const sustainKey = "v_" + v + v + v + v;
     const sustainArr = nvChan(sustainKey);
     let arr = sustainArr || nvChan("v_" + v);
-    // 個別サンプルの録音レベル差の是正 (2026-07-24 Icefaceさん実聴報告): v_uuuu (長い
-    // 持続テイク) が他の母音より大きく聴こえた → -3dB。この1本の録音だけの補正
-    // (短い v_u や他母音の持続テイクは無変換・native (Swift ConsonantSampleBank.
-    // knownSampleGainDb) と同じ表)。sustainArr が実際に使われたときだけ適用する
-    // (短い v_u へのフォールバック時は触らない)。
-    if (arr === sustainArr && sustainKey === "v_uuuu") {
-      const gain = Math.pow(10, -3.0 / 20);
+    // 個別サンプルの録音レベル差の是正 (2026-07-24 Icefaceさん実聴報告 2件): 長い持続
+    // テイクのうち v_uuuu (duuuu) と v_iiii (mii の単独 i) が他より大きく聴こえた → 各-3dB。
+    // ファイル狙い撃ちの表 (native = Swift ConsonantSampleBank.knownSampleGainDb と対)。
+    // sustainArr が実際に使われたときだけ適用 (短い v_u/v_i へのフォールバック時は無変換)。
+    const NV_SAMPLE_GAIN_DB = { v_uuuu: -3.0, v_iiii: -3.0 };
+    const gdb = NV_SAMPLE_GAIN_DB[sustainKey];
+    if (arr && arr === sustainArr && gdb != null) {
+      const gain = Math.pow(10, gdb / 20);
       arr = Float32Array.from(arr, x => x * gain);
     }
     if (arr) bank.v.set(v, nvTrimTrailingSilence(arr, 0.004, Math.round(sr * 0.01)));
@@ -3432,7 +3433,13 @@ document.addEventListener("DOMContentLoaded", () => {
   const reasonEl = document.getElementById("fb-reason");
   if (reasonEl) {
     reasonEl.addEventListener("blur", syncReasonToVote);
-    reasonEl.addEventListener("keydown", e => { if (e.key === "Enter") reasonEl.blur(); });
+    // isComposing ガード (2026-07-24 Icefaceさん報告): 日本語 IME の変換確定 Enter でも
+    // blur が発火し、変換中の blur は Chrome が未確定文字列を確定挿入するため
+    // テキストが二重に書き込まれていた。変換確定の Enter は素通しする。
+    reasonEl.addEventListener("keydown", e => {
+      if (e.isComposing || e.keyCode === 229) return;
+      if (e.key === "Enter") reasonEl.blur();
+    });
   }
 });
 
@@ -4288,6 +4295,7 @@ function playRomaji() {
 }
 document.getElementById("btn-romaji").addEventListener("click", playRomaji);
 document.getElementById("romaji-input").addEventListener("keydown", e => {
+  if (e.isComposing || e.keyCode === 229) return;   // IME 変換確定の Enter は素通し (fb-reason と同じ)
   if (e.key === "Enter") playRomaji();
 });
 const romajiQuick = ["bouba", "kiki", "aauu", "gooon", "don", "kakka",
